@@ -4,7 +4,7 @@ import { db, klipSyncProjects } from "@/db";
 
 const MAX_JSON_BYTES = 50 * 1024 * 1024;
 
-function isRecord({ value }: { value: unknown }): value is Record<string, unknown> {
+function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -37,7 +37,7 @@ export async function PUT(
 	} catch {
 		return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
 	}
-	if (!isRecord({ value: body })) {
+	if (!isRecord(body)) {
 		return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
 	}
 	const name = body["name"];

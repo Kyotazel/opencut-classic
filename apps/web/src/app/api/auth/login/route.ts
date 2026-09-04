@@ -13,7 +13,7 @@ function rateLimited({ ip }: { ip: string }): boolean {
 	return list.length > MAX_ATTEMPTS;
 }
 
-function isRecord({ value }: { value: unknown }): value is Record<string, unknown> {
+function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
 	} catch {
 		return NextResponse.json({ error: "Username/password salah" }, { status: 401 });
 	}
-	if (!isRecord({ value: body })) {
+	if (!isRecord(body)) {
 		return NextResponse.json({ error: "Username/password salah" }, { status: 401 });
 	}
 	const username = body["username"];

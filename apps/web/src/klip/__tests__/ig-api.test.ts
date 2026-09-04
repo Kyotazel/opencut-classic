@@ -47,7 +47,7 @@ describe("ig-api publishReel", () => {
 			igUserId: "123",
 			accessToken: "tok",
 			caption: "halo",
-			videoBytes: new Uint8Array([1, 2, 3]),
+			videoBytes: new Uint8Array([1, 2, 3]).buffer,
 			pollIntervalMs: 1,
 			onStage: (s) => stages.push(s),
 		});
@@ -69,7 +69,7 @@ describe("ig-api publishReel", () => {
 				igUserId: "123",
 				accessToken: "tok",
 				caption: "",
-				videoBytes: new Uint8Array([1]),
+				videoBytes: new Uint8Array([1]).buffer,
 				pollIntervalMs: 1,
 			}),
 		).rejects.toThrow("Video tidak valid");
@@ -79,13 +79,18 @@ describe("ig-api publishReel", () => {
 		__setFetchMock(async () =>
 			jsonResponse({ body: { error: { message: "invalid", code: 190 } }, status: 401 }),
 		);
-		const err = await publishReel({
-			igUserId: "123",
-			accessToken: "basi",
-			caption: "",
-			videoBytes: new Uint8Array([1]),
-			pollIntervalMs: 1,
-		}).catch((e: Error) => e);
-		expect(err.message).toContain("IG_TOKEN_INVALID");
+		let message = "";
+		try {
+			await publishReel({
+				igUserId: "123",
+				accessToken: "basi",
+				caption: "",
+				videoBytes: new Uint8Array([1]).buffer,
+				pollIntervalMs: 1,
+			});
+		} catch (e) {
+			message = e instanceof Error ? e.message : "unknown";
+		}
+		expect(message).toContain("IG_TOKEN_INVALID");
 	});
 });

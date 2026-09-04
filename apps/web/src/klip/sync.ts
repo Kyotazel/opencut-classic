@@ -37,14 +37,14 @@ export function setSyncBase({ id, updatedAt }: { id: string; updatedAt: string }
 	}
 }
 
-function isRecord({ value }: { value: unknown }): value is Record<string, unknown> {
+function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function readError({ res, fallback }: { res: Response; fallback: string }): Promise<string> {
 	try {
 		const body: unknown = await res.json();
-		if (!isRecord({ value: body })) return `${fallback}: ${res.status}`;
+		if (!isRecord(body)) return `${fallback}: ${res.status}`;
 		const err = body["error"];
 		return typeof err === "string" ? err : `${fallback}: ${res.status}`;
 	} catch {
@@ -67,7 +67,7 @@ export async function pullProject({ id }: { id: string }): Promise<{
 	if (res.status === 404) return { pulled: false, skippedMedia: 0 };
 	if (!res.ok) throw new Error(await readError({ res, fallback: "Gagal mengambil project" }));
 	const body: unknown = await res.json();
-	const rec = isRecord({ value: body }) ? body : null;
+	const rec = isRecord(body) ? body : null;
 	const data = rec?.["data"];
 	const serverUpdatedAt = rec?.["updatedAt"];
 	if (typeof data !== "string" || typeof serverUpdatedAt !== "string") {
@@ -80,7 +80,7 @@ export async function pullProject({ id }: { id: string }): Promise<{
 		throw new Error("Data project server rusak");
 	}
 	const meta: unknown = serialized.metadata;
-	if (!isRecord({ value: meta }) || meta["id"] !== id) {
+	if (!isRecord(meta) || meta["id"] !== id) {
 		throw new Error("Data project server tidak cocok");
 	}
 	const storage = await getStorageService();
@@ -88,12 +88,12 @@ export async function pullProject({ id }: { id: string }): Promise<{
 	const mediaRes = await fetch(`/api/sync/projects/${encodeURIComponent(id)}/media`);
 	if (!mediaRes.ok) throw new Error(await readError({ res: mediaRes, fallback: "Gagal mengambil daftar media" }));
 	const mediaBody: unknown = await mediaRes.json();
-	const mediaRec = isRecord({ value: mediaBody }) ? mediaBody : null;
+	const mediaRec = isRecord(mediaBody) ? mediaBody : null;
 	const list = mediaRec?.["media"];
 	const items = Array.isArray(list) ? list : [];
 	let skippedMedia = 0;
 	for (const raw of items) {
-		if (!isRecord({ value: raw })) {
+		if (!isRecord(raw)) {
 			skippedMedia += 1;
 			continue;
 		}
@@ -152,7 +152,7 @@ export async function pushProject({
 		let serverUpdatedAt = "";
 		try {
 			const body: unknown = await res.json();
-			if (isRecord({ value: body }) && typeof body["serverUpdatedAt"] === "string") {
+			if (isRecord(body) && typeof body["serverUpdatedAt"] === "string") {
 				serverUpdatedAt = body["serverUpdatedAt"];
 			}
 		} catch {
@@ -162,7 +162,7 @@ export async function pushProject({
 	}
 	if (!res.ok) throw new Error(await readError({ res, fallback: "Gagal menyimpan project" }));
 	const body: unknown = await res.json();
-	const rec = isRecord({ value: body }) ? body : null;
+	const rec = isRecord(body) ? body : null;
 	if (typeof rec?.["updatedAt"] !== "string") throw new Error("Respons server tidak valid");
 	const updatedAt = rec["updatedAt"];
 
@@ -170,11 +170,11 @@ export async function pushProject({
 	const serverIds = new Set<string>();
 	if (mediaRes.ok) {
 		const mediaBody: unknown = await mediaRes.json();
-		const mediaRec = isRecord({ value: mediaBody }) ? mediaBody : null;
+		const mediaRec = isRecord(mediaBody) ? mediaBody : null;
 		const list = mediaRec?.["media"];
 		if (Array.isArray(list)) {
 			for (const raw of list) {
-				if (isRecord({ value: raw }) && typeof raw["id"] === "string") serverIds.add(raw["id"]);
+				if (isRecord(raw) && typeof raw["id"] === "string") serverIds.add(raw["id"]);
 			}
 		}
 	}

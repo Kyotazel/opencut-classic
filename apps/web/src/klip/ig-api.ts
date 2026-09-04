@@ -7,10 +7,12 @@ export const IG_SCOPES = [
 ];
 export const IG_API_VERSION = "v24.0";
 
-let fetchImpl: typeof fetch = fetch;
+export type FetchFn = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+let fetchImpl: FetchFn = fetch;
 
 /** @internal override HTTP untuk test */
-export function __setFetchMock(fn: typeof fetch): void {
+export function __setFetchMock(fn: FetchFn): void {
 	fetchImpl = fn;
 }
 
@@ -140,7 +142,7 @@ export interface PublishReelOpts {
 	igUserId: string;
 	accessToken: string;
 	caption: string;
-	videoBytes: Uint8Array;
+	videoBytes: ArrayBuffer;
 	pollIntervalMs?: number;
 	onStage?: (stage: ReelStage) => void;
 }
@@ -222,7 +224,7 @@ async function uploadBytes({
 }: {
 	uploadUrl: string;
 	token: string;
-	videoBytes: Uint8Array;
+	videoBytes: ArrayBuffer;
 }): Promise<void> {
 	const res = await fetchImpl(uploadUrl, {
 		method: "PUT",

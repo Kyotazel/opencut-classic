@@ -151,7 +151,7 @@ export async function processItems({
 	const targets = onlyItemIds
 		? items.filter((i) => onlyItemIds.includes(i.id) && i.status === "failed")
 		: items.filter((i) => i.status === "queued");
-	let videoBytes: Uint8Array | null = null;
+	let videoBytes: ArrayBuffer | null = null;
 	for (const item of targets) {
 		await db
 			.update(klipIgPublishItems)
@@ -167,7 +167,8 @@ export async function processItems({
 				throw new Error("Akun tidak aktif. Hubungkan ulang akun ini.");
 			}
 			if (!videoBytes) {
-				videoBytes = await readFile(path.join(dataRoot(), publish.videoPath));
+				const buf = await readFile(path.join(dataRoot(), publish.videoPath));
+				videoBytes = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 			}
 			const token = decryptToken(account.accessTokenEnc);
 			const result = await publishFn({

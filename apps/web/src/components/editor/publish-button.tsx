@@ -50,15 +50,15 @@ interface DialogInitial {
 	accounts: IgAccount[];
 }
 
-function isRecord({ value }: { value: unknown }): value is Record<string, unknown> {
+function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseAccounts({ value }: { value: unknown }): IgAccount[] {
-	if (!isRecord({ value }) || !Array.isArray(value["accounts"])) return [];
+	if (!isRecord(value) || !Array.isArray(value["accounts"])) return [];
 	const out: IgAccount[] = [];
 	for (const raw of value["accounts"]) {
-		if (!isRecord({ value: raw })) continue;
+		if (!isRecord(raw)) continue;
 		if (typeof raw["id"] !== "string" || typeof raw["username"] !== "string") continue;
 		const status = raw["status"];
 		out.push({
@@ -73,14 +73,14 @@ function parseAccounts({ value }: { value: unknown }): IgAccount[] {
 }
 
 function parsePublishStatus({ value }: { value: unknown }): PublishStatus | null {
-	if (!isRecord({ value })) return null;
+	if (!isRecord(value)) return null;
 	const publish = value["publish"];
 	const items = value["items"];
-	if (!isRecord({ value: publish }) || typeof publish["id"] !== "string") return null;
+	if (!isRecord(publish) || typeof publish["id"] !== "string") return null;
 	if (!Array.isArray(items)) return null;
 	const parsed: PublishItem[] = [];
 	for (const raw of items) {
-		if (!isRecord({ value: raw })) continue;
+		if (!isRecord(raw)) continue;
 		if (typeof raw["id"] !== "string" || typeof raw["igAccountId"] !== "string") continue;
 		const status = raw["status"];
 		if (
@@ -113,7 +113,7 @@ function parsePublishStatus({ value }: { value: unknown }): PublishStatus | null
 async function readError({ res }: { res: Response }): Promise<string> {
 	try {
 		const body: unknown = await res.json();
-		if (isRecord({ value: body }) && typeof body["error"] === "string") return body["error"];
+		if (isRecord(body) && typeof body["error"] === "string") return body["error"];
 	} catch {
 		// abaikan, pakai pesan default
 	}
@@ -151,7 +151,7 @@ export function PublishButton() {
 			);
 			if (res.ok) {
 				const body: unknown = await res.json();
-				if (isRecord({ value: body }) && isRecord({ value: body["project"] })) {
+				if (isRecord(body) && isRecord(body["project"])) {
 					const proj = body["project"];
 					if (typeof proj["id"] === "string") data.klipProjectId = proj["id"];
 					if (typeof proj["name"] === "string") data.projectName = proj["name"];
@@ -272,7 +272,7 @@ function PublishDialog({
 			const res = await fetch("/api/klip/publishes", { method: "POST", body: form });
 			if (!res.ok) throw new Error(await readError({ res }));
 			const body: unknown = await res.json();
-			if (!isRecord({ value: body }) || typeof body["id"] !== "string") {
+			if (!isRecord(body) || typeof body["id"] !== "string") {
 				throw new Error("Respons server tidak valid");
 			}
 			setPublishId(body["id"]);
