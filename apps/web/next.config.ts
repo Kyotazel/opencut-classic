@@ -3,6 +3,10 @@ import { withBotId } from "botid/next/config";
 import { withContentCollections } from "@content-collections/next";
 
 const nextConfig: NextConfig = {
+	experimental: {
+		// Upload video publish/sync bisa ratusan MB; default proxy 10MB memotong body.
+		proxyClientMaxBodySize: "500mb",
+	},
 	compiler: {
 		removeConsole: process.env.NODE_ENV === "production",
 	},
