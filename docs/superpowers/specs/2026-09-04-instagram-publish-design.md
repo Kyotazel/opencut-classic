@@ -31,15 +31,26 @@ Tanpa infra baru (tanpa Redis/worker). Token Meta tidak pernah ke browser.
   `containerId?`, `status` (`queued` | `uploading` | `processing` | `published` | `failed`),
   `permalink?`, `error?`, `attempts` default 0.
 
-## 4. Alur OAuth (in-app)
+## 4. Alur login (in-app, Instagram Login langsung)
 
-1. Klik "Hubungkan Instagram" -> popup FB Login (`instagram_content_publish`, `pages_show_list`,
-   `pages_read_engagement` — finalisasi scope saat implementasi).
-2. Callback ke server: tukar code -> user token -> long-lived token (~60 hari).
-3. Server query `/me/accounts` + `connected_instagram_account` -> daftar IG business tersedia.
-4. User centang akun mana yang dihubungkan (boleh banyak) -> simpan terenkripsi.
-5. Manajemen: daftar akun (username, foto, status), disconnect per akun, penanda `token_expired`
-   + tombol reconnect saat Meta menolak token.
+Keputusan (revisi 2026-09-04): pakai **Instagram API with Instagram Login**
+(Business Login for Instagram), bukan Facebook Login. Jalur ini tetap bisa publish
+dan tidak butuh Halaman Facebook / kehadiran Facebook. Jalur Facebook Login hanya
+untuk kasus akun yang terhubung ke Halaman Facebook.
+
+1. Klik "Hubungkan Instagram" -> redirect (full-page, bukan popup) ke
+   `instagram.com/oauth/authorize` dengan scope `instagram_business_basic` +
+   `instagram_business_content_publish`.
+2. Callback ke server: tukar code -> Instagram User access token (host `graph.instagram.com`).
+3. Satu login = satu akun IG. Ulangi untuk menghubungkan banyak akun.
+4. Manajemen: daftar akun (username, foto, status), disconnect per akun, penanda
+   token expired + tombol reconnect.
+
+Yang perlu disiapkan di sisi Meta App (oleh user, dilakukan sekali):
+- Produk "Instagram API with Instagram Login" aktif di Meta App.
+- Redirect URI mengarah ke server (`/api/klip/ig-accounts/callback`) terdaftar di dashboard.
+- `IG_APP_ID` + `IG_APP_SECRET` dipasang sebagai env di server (JANGAN via chat/commit).
+- App Review lolos untuk akses data live; selama dev, akun tester yang ditambahkan di dashboard.
 
 ## 5. Alur publish (editor)
 
