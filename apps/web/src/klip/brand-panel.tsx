@@ -13,6 +13,7 @@ import { processMediaAssets } from "@/media/processing";
 import {
 	type KlipBrandKind,
 	type KlipBrandLayer,
+	elementToKlipLayer,
 	fileExtension,
 	klipLayerToElement,
 	VOLUME_DB_MAX,
@@ -32,7 +33,12 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { cn } from "@/utils/ui";
 
-type Draft = KlipBrandLayer & { elementId: string | null; trackId: string | null };
+type Draft = KlipBrandLayer & {
+	elementId: string | null;
+	trackId: string | null;
+	assetWidth: number | null;
+	assetHeight: number | null;
+};
 
 const GAIN_DEFAULT = 0.35;
 
@@ -104,6 +110,8 @@ export function BrandPanel() {
 					...l,
 					elementId: prevById.get(l.id)?.elementId ?? null,
 					trackId: prevById.get(l.id)?.trackId ?? null,
+					assetWidth: prevById.get(l.id)?.assetWidth ?? null,
+					assetHeight: prevById.get(l.id)?.assetHeight ?? null,
 				}));
 			});
 		} catch (error) {
@@ -130,6 +138,102 @@ export function BrandPanel() {
 			}
 		})();
 	}, [refresh]);
+
+	// Sync balik: geser/resize di canvas/timeline tulis balik ke DB via
+	// elementToKlipLayer. Hanya field yang teramati (tanpa z/duck agar tidak
+	// tertimpa), PATCH di-debounce per layer. Nilai yang sama persis (hasil
+	// tulis panel sendiri) jadi no-op sehingga tidak ada loop.
+	const layersRef = useRef(layers);
+	layersRef.current = layers;
+	const syncCtxRef = useRef({ klipProjectId, canvasWidth, canvasHeight, totalDuration });
+	syncCtxRef.current = { klipProjectId, canvasWidth, canvasHeight, totalDuration };
+	const pendingPatchRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+	useEffect(() => {
+		return () => {
+			for (const t of pendingPatchRef.current.values()) clearTimeout(t);
+			pendingPatchRef.current.clear();
+		};
+	}, []);
+	useEffect(() => {
+		const EPS = 1e-4;
+		const close = (a: number, b: number) => Math.abs(a - b) < EPS;
+		const syncFromTimeline = () => {
+			const ctx = syncCtxRef.current;
+			if (!ctx.klipProjectId) return;
+			let scene: ReturnType<typeof editor.scenes.getActiveScene>;
+			try {
+				scene = editor.scenes.getActiveScene();
+			} catch {
+				return;
+			}
+			const tracks = [...scene.tracks.overlay, ...scene.tracks.main, ...scene.tracks.audio];
+			const mediaAssets = editor.media.getAssets();
+			for (const draft of layersRef.current) {
+				if (!draft.elementId || !draft.trackId) continue;
+				const track = tracks.find((t) => t.id === draft.trackId);
+				const element = track?.elements.find((e) => e.id === draft.elementId);
+				if (!element) continue;
+				const media = mediaAssets.find((a) => a.id === element.mediaId);
+				const assetWidth = draft.assetWidth ?? media?.width ?? null;
+				const assetHeight = draft.assetHeight ?? media?.height ?? null;
+				const raw = elementToKlipLayer(element, {
+					canvasWidth: ctx.canvasWidth,
+					canvasHeight: ctx.canvasHeight,
+					totalDuration: ctx.totalDuration,
+					assetWidth,
+					assetHeight,
+				});
+				// Snap full dengan epsilon (konversi detik<->ticks tidak selalu exact).
+				const full =
+					raw.full || (Math.abs(raw.start) < 1e-3 && Math.abs(raw.dur - ctx.totalDuration) < 1e-3);
+				const patch: Partial<KlipBrandLayer> = {
+					enabled: raw.enabled,
+					x: raw.x,
+					y: raw.y,
+					scale: raw.scale,
+					rotate: raw.rotate,
+					opacity: raw.opacity,
+					full,
+					start: full ? 0 : raw.start,
+					dur: full ? 0 : raw.dur,
+				};
+				if (draft.kind === "audio" && raw.volume !== undefined) patch.volume = raw.volume;
+				const same =
+					patch.enabled === draft.enabled &&
+					close(patch.x!, draft.x) &&
+					close(patch.y!, draft.y) &&
+					close(patch.scale!, draft.scale) &&
+					close(patch.rotate!, draft.rotate) &&
+					close(patch.opacity!, draft.opacity) &&
+					patch.full === draft.full &&
+					close(patch.start!, draft.start) &&
+					close(patch.dur!, draft.dur) &&
+					(patch.volume === undefined || close(patch.volume, draft.volume));
+				if (same) continue;
+				const projectId = ctx.klipProjectId;
+				const id = draft.id;
+				setLayers((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+				if (pendingPatchRef.current.has(id)) continue;
+				pendingPatchRef.current.set(
+					id,
+					setTimeout(() => {
+						pendingPatchRef.current.delete(id);
+						fetch(`/api/klip/projects/${projectId}/brand`, {
+							method: "PATCH",
+							headers: { "content-type": "application/json" },
+							body: JSON.stringify({ id, ...patch }),
+						}).catch((error) => console.error("Brand panel: reverse sync PATCH failed", error));
+					}, 600),
+				);
+			}
+		};
+		const un1 = editor.timeline.subscribe(syncFromTimeline);
+		const un2 = editor.scenes.subscribe(syncFromTimeline);
+		return () => {
+			un1();
+			un2();
+		};
+	}, [editor]);
 
 	const patchLayer = useCallback(
 		async ({ id, patch }: { id: string; patch: Record<string, unknown> }) => {
@@ -394,7 +498,15 @@ export function BrandPanel() {
 				if (found) {
 					setLayers((prev) =>
 						prev.map((l) =>
-							l.id === draft.id ? { ...l, elementId: found!.elementId, trackId: found!.trackId } : l,
+							l.id === draft.id
+								? {
+										...l,
+										elementId: found!.elementId,
+										trackId: found!.trackId,
+										assetWidth: saved.width ?? null,
+										assetHeight: saved.height ?? null,
+									}
+								: l,
 						),
 					);
 				}
@@ -460,6 +572,8 @@ export function BrandPanel() {
 				...l,
 				elementId: null,
 				trackId: null,
+				assetWidth: null,
+				assetHeight: null,
 			}));
 			setLayers(drafts);
 			// Sekuensial: insert memakai diff id sebelum/sesudah, concurrent akan merusak diff.
