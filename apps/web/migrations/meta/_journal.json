@@ -8,6 +8,13 @@
       "when": 1788487054900,
       "tag": "0000_spooky_maelstrom",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1788487330612,
+      "tag": "0001_last_lifeguard",
+      "breakpoints": true
     }
   ]
 }
