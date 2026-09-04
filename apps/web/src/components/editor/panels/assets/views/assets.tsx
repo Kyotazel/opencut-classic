@@ -30,7 +30,7 @@ import { mediaTimeFromSeconds, type MediaTime } from "@/wasm";
 import { useEditor } from "@/editor/use-editor";
 import { useFileUpload } from "@/media/use-file-upload";
 import { invokeAction } from "@/actions";
-import { processMediaAssets } from "@/media/processing";
+import { processMediaAssets, type ServerMediaMeta } from "@/media/processing";
 import { showMediaUploadToast } from "@/media/upload-toast";
 import {
 	SelectableItem,
@@ -58,6 +58,42 @@ import {
 	Video01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
+
+interface UploadServerMeta extends ServerMediaMeta {
+	mediaId: string;
+}
+
+const uploadFileToServer = async ({
+	file,
+}: {
+	file: File;
+}): Promise<UploadServerMeta> => {
+	const form = new FormData();
+	form.append("file", file);
+	const res = await fetch("/api/uploads", { method: "POST", body: form });
+	if (!res.ok) {
+		let detail: string | undefined;
+		try {
+			const body = (await res.json()) as { error?: string };
+			detail = body.error;
+		} catch {
+			// Non-JSON error body — fall back to the generic message below.
+		}
+		throw new Error(detail ?? `Upload gagal: ${file.name}`);
+	}
+	const meta = (await res.json()) as {
+		mediaId: string;
+		url: string;
+		width: number | null;
+		height: number | null;
+		duration: number | null;
+		thumbnailUrl: string | null;
+	};
+	if (!meta.mediaId || !meta.url) {
+		throw new Error(`Upload gagal: ${file.name}`);
+	}
+	return meta;
+};
 
 export function MediaView() {
 	const editor = useEditor();
@@ -90,25 +126,35 @@ export function MediaView() {
 			await showMediaUploadToast({
 				filesCount: files.length,
 				promise: async () => {
-					const processedAssets = await processMediaAssets({
-						files,
-						onProgress: (progress: { progress: number }) =>
-							setProgress(progress.progress),
-					});
-					for (const asset of processedAssets) {
-						await editor.media.addMediaAsset({
-							projectId: activeProject.metadata.id,
-							asset,
+					const uploadedNames: string[] = [];
+					for (const [i, file] of files.entries()) {
+						// Server-first: persist the file via POST /api/uploads before
+						// the asset ever reaches the media bin. On failure the file
+						// is skipped entirely — no local-only asset is added, since
+						// server persistence is required for refresh survival.
+						const meta = await uploadFileToServer({ file });
+						const processed = await processMediaAssets({
+							files: [file],
+							serverMeta: meta,
 						});
+						for (const asset of processed) {
+							const saved = await editor.media.addMediaAsset({
+								projectId: activeProject.metadata.id,
+								asset,
+							});
+							if (saved) uploadedNames.push(saved.name);
+						}
+						setProgress(((i + 1) / files.length) * 100);
 					}
 					return {
-						uploadedCount: processedAssets.length,
-						assetNames: processedAssets.map((asset) => asset.name),
+						uploadedCount: uploadedNames.length,
+						assetNames: uploadedNames,
 					};
 				},
 			});
 		} catch (error) {
-			console.error("Error processing files:", error);
+			console.error("Error uploading files:", error);
+			toast.error("Upload ke server gagal");
 		} finally {
 			setIsProcessing(false);
 			setProgress(0);

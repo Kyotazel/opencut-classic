@@ -82,12 +82,24 @@ async function generateImageThumbnail({
 	});
 }
 
+export interface ServerMediaMeta {
+	url: string;
+	width: number | null;
+	height: number | null;
+	duration: number | null;
+	thumbnailUrl: string | null;
+}
+
 export async function processMediaAssets({
 	files,
 	onProgress,
+	serverMeta,
 }: {
 	files: FileList | File[];
 	onProgress?: ({ progress }: { progress: number }) => void;
+	/** Probe results from POST /api/uploads. When present, width/height/duration
+	 *  and the server URL/thumbnail are used instead of local probing. */
+	serverMeta?: ServerMediaMeta | null;
 }): Promise<ProcessedMediaAsset[]> {
 	const fileArray = Array.from(files);
 	const processedAssets: ProcessedMediaAsset[] = [];
@@ -117,13 +129,46 @@ export async function processMediaAssets({
 			continue;
 		}
 
-		const url = URL.createObjectURL(file);
-		let thumbnailUrl: string | undefined;
-		let duration: number | undefined;
-		let width: number | undefined;
-		let height: number | undefined;
+		const url = serverMeta?.url ?? URL.createObjectURL(file);
+		let thumbnailUrl: string | undefined = serverMeta?.thumbnailUrl ?? undefined;
+		let duration: number | undefined =
+			serverMeta?.duration ?? undefined;
+		let width: number | undefined = serverMeta?.width ?? undefined;
+		let height: number | undefined = serverMeta?.height ?? undefined;
 		let fps: number | undefined;
 		let hasAudio: boolean | undefined;
+
+		// When server meta is present (server-side upload flow), only missing
+		// fields are probed locally — dimensions/duration already came from
+		// ffprobe on the server. The thumbnail stays null when the server has
+		// none yet (handled by the media bin placeholder).
+		if (serverMeta) {
+			const needsLocalProbe =
+				fileType === "image" || duration == null || width == null;
+			if (!needsLocalProbe) {
+				processedAssets.push({
+					name: file.name,
+					type: fileType,
+					file,
+					url,
+					thumbnailUrl,
+					duration,
+					width,
+					height,
+					fps,
+					hasAudio,
+				});
+
+				await new Promise((resolve) => setTimeout(resolve, 0));
+
+				completed += 1;
+				if (onProgress) {
+					const percent = Math.round((completed / total) * 100);
+					onProgress({ progress: percent });
+				}
+				continue;
+			}
+		}
 
 		try {
 			if (fileType === "image") {
@@ -134,14 +179,17 @@ export async function processMediaAssets({
 			} else if (fileType === "video") {
 				try {
 					const videoData = await readVideoFile({ file });
-					duration = videoData.duration;
-					width = videoData.width;
-					height = videoData.height;
+					// Server (ffprobe) values win when present; local probing
+					// fills only what the server could not provide.
+					if (duration == null) duration = videoData.duration;
+					if (width == null) width = videoData.width;
+					if (height == null) height = videoData.height;
 					fps = Number.isFinite(videoData.fps)
 						? Math.round(videoData.fps)
 						: undefined;
 					hasAudio = videoData.hasAudio;
-					thumbnailUrl = videoData.thumbnailUrl ?? undefined;
+					if (thumbnailUrl == null)
+						thumbnailUrl = videoData.thumbnailUrl ?? undefined;
 
 					if (!videoData.canDecode) {
 						toast.error(`Can't preview ${file.name}`, {
@@ -161,7 +209,7 @@ export async function processMediaAssets({
 					});
 				}
 			} else if (fileType === "audio") {
-				duration = await getMediaDuration({ file });
+				if (duration == null) duration = await getMediaDuration({ file });
 			}
 
 			processedAssets.push({
@@ -187,7 +235,7 @@ export async function processMediaAssets({
 		} catch (error) {
 			console.error("Error processing file:", file.name, error);
 			toast.error(`Failed to process ${file.name}`);
-			URL.revokeObjectURL(url);
+			if (!serverMeta?.url) URL.revokeObjectURL(url);
 		}
 	}
 
