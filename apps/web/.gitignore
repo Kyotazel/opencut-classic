@@ -12,3 +12,6 @@
 next-env.d.ts
 
 *.tsbuildinfo
+
+# Klip local upload storage (KLIP_DATA_ROOT default)
+.klip-data/
