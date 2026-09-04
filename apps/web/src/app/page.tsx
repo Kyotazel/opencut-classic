@@ -1,21 +1,87 @@
-import { Hero } from "@/components/landing/hero";
-import { Header } from "@/components/header";
-import { Footer } from "@/components/footer";
-import type { Metadata } from "next";
-import { SITE_URL } from "@/site/brand";
+"use client";
 
-export const metadata: Metadata = {
-	alternates: {
-		canonical: SITE_URL,
-	},
-};
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
-export default async function Home() {
+async function readLoginError({ res }: { res: Response }): Promise<string> {
+	try {
+		const body: unknown = await res.json();
+		if (typeof body !== "object" || body === null || Array.isArray(body)) {
+			return `Login gagal: ${res.status}`;
+		}
+		const err = Object.fromEntries(Object.entries(body))["error"];
+		return typeof err === "string" ? err : `Login gagal: ${res.status}`;
+	} catch {
+		return `Login gagal: ${res.status}`;
+	}
+}
+
+export default function LoginPage() {
+	const [username, setUsername] = useState("");
+	const [password, setPassword] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	const handleSubmit = async (e: React.FormEvent) => {
+		e.preventDefault();
+		if (busy) return;
+		setBusy(true);
+		setError(null);
+		try {
+			const res = await fetch("/api/auth/login", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ username, password }),
+			});
+			if (!res.ok) {
+				throw new Error(await readLoginError({ res }));
+			}
+			window.location.href = "/projects";
+		} catch (err) {
+			setError(err instanceof Error ? err.message : "Login gagal");
+		} finally {
+			setBusy(false);
+		}
+	};
+
 	return (
-		<div>
-			<Header />
-			<Hero />
-			<Footer />
+		<div className="bg-background flex min-h-screen items-center justify-center px-4">
+			<Card className="w-full max-w-sm">
+				<CardContent className="space-y-4 py-6">
+					<div>
+						<h1 className="text-xl font-semibold">Masuk</h1>
+						<p className="text-muted-foreground text-sm">Klip Studio — akses internal.</p>
+					</div>
+					<form onSubmit={(e) => void handleSubmit(e)} className="space-y-3">
+						<div className="space-y-1">
+							<Label htmlFor="username">Username</Label>
+							<Input
+								id="username"
+								autoComplete="username"
+								value={username}
+								onChange={(e) => setUsername(e.target.value)}
+							/>
+						</div>
+						<div className="space-y-1">
+							<Label htmlFor="password">Password</Label>
+							<Input
+								id="password"
+								type="password"
+								autoComplete="current-password"
+								value={password}
+								onChange={(e) => setPassword(e.target.value)}
+							/>
+						</div>
+						{error && <p className="text-sm text-red-500">{error}</p>}
+						<Button type="submit" className="w-full" disabled={busy}>
+							{busy ? "Memeriksa..." : "Masuk"}
+						</Button>
+					</form>
+				</CardContent>
+			</Card>
 		</div>
 	);
 }
