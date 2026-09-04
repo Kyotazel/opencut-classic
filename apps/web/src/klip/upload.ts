@@ -48,6 +48,10 @@ export function newMediaId(): string {
 	return `m_${generateUUID().replace(/-/g, "").slice(0, 12)}`;
 }
 
+export function newBatchId(): string {
+	return `b_${generateUUID().replace(/-/g, "").slice(0, 12)}`;
+}
+
 export function dataRoot(): string {
 	return process.env.KLIP_DATA_ROOT ?? path.join(process.cwd(), ".klip-data");
 }
@@ -128,10 +132,24 @@ export async function saveUpload({
 }: {
 	file: File;
 }): Promise<SaveUploadResult> {
-	const ext = extOf(file.name);
+	return saveVideoBuffer({
+		bytes: Buffer.from(await file.arrayBuffer()),
+		filename: file.name,
+	});
+}
+
+/** Inti penyimpanan video dipakai upload satuan maupun hasil extract zip. */
+export async function saveVideoBuffer({
+	bytes,
+	filename,
+}: {
+	bytes: Buffer;
+	filename: string;
+}): Promise<SaveUploadResult> {
+	const ext = extOf(filename);
 	if (!ACCEPTED_VIDEO_EXTS.has(ext)) {
 		throw new UploadError(
-			`Unsupported file type "${ext || file.name}". Only mp4, webm, and mov are accepted.`,
+			`Unsupported file type "${ext || filename}". Only mp4, webm, and mov are accepted.`,
 			400,
 		);
 	}
@@ -141,7 +159,7 @@ export async function saveUpload({
 	await mkdir(path.join(root, UPLOAD_DIR), { recursive: true });
 	const relPath = path.join(UPLOAD_DIR, `${mediaId}${ext}`);
 	const absPath = path.join(root, relPath);
-	await writeFile(absPath, Buffer.from(await file.arrayBuffer()));
+	await writeFile(absPath, bytes);
 
 	const probed = await probeVideo(absPath);
 	try {
@@ -149,7 +167,7 @@ export async function saveUpload({
 			id: mediaId,
 			kind: "source",
 			assetKind: "video",
-			name: file.name.slice(0, 255),
+			name: filename.slice(0, 255),
 			filePath: relPath,
 			width: probed.width,
 			height: probed.height,
