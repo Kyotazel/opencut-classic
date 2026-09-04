@@ -5,7 +5,7 @@ export const IG_SCOPES = [
 	"instagram_business_basic",
 	"instagram_business_content_publish",
 ];
-export const IG_API_VERSION = "v24.0";
+export const IG_API_VERSION = "v26.0";
 
 export type FetchFn = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -199,39 +199,45 @@ async function igRequest({
 	return rec;
 }
 
-async function startResumableUpload({
+async function createReelUploadSession({
 	igUserId,
 	token,
+	caption,
 }: {
 	igUserId: string;
 	token: string;
-}): Promise<string> {
-	const rec = await igRequest({
-		method: "POST",
-		path: `/${igUserId}/video`,
-		token,
-		params: { upload_type: "resumable" },
-	});
-	const uploadUrl = strField({ rec: rec, name: "upload_url" });
-	if (!uploadUrl) throw new Error("Instagram tidak mengembalikan upload_url");
-	return uploadUrl;
+	caption: string;
+}): Promise<{ containerId: string; uploadUri: string }> {
+	const params: Record<string, string> = {
+		media_type: "REELS",
+		upload_type: "resumable",
+		share_to_feed: "true",
+	};
+	if (caption) params["caption"] = caption;
+	const rec = await igRequest({ method: "POST", path: `/${igUserId}/media`, token, params });
+	const containerId = strField({ rec, name: "id" });
+	const uploadUri = strField({ rec, name: "uri" });
+	if (!containerId || !uploadUri) {
+		throw new Error("Instagram tidak mengembalikan container id / upload uri");
+	}
+	return { containerId, uploadUri };
 }
 
 async function uploadBytes({
-	uploadUrl,
+	uploadUri,
 	token,
 	videoBytes,
 }: {
-	uploadUrl: string;
+	uploadUri: string;
 	token: string;
 	videoBytes: ArrayBuffer;
 }): Promise<void> {
-	const res = await fetchImpl(uploadUrl, {
-		method: "PUT",
+	const res = await fetchImpl(uploadUri, {
+		method: "POST",
 		headers: {
 			Authorization: `OAuth ${token}`,
-			"Content-Type": "application/octet-stream",
-			Offset: "0",
+			offset: "0",
+			file_size: String(videoBytes.byteLength),
 		},
 		body: videoBytes,
 	});
@@ -239,29 +245,6 @@ async function uploadBytes({
 		const rec = asRecord({ value: await res.json().catch(() => null) });
 		throw igError({ status: res.status, rec });
 	}
-}
-
-async function createReelContainer({
-	igUserId,
-	token,
-	caption,
-	videoUrl,
-}: {
-	igUserId: string;
-	token: string;
-	caption: string;
-	videoUrl: string;
-}): Promise<string> {
-	const params: Record<string, string> = {
-		media_type: "REELS",
-		video_url: videoUrl,
-		share_to_feed: "true",
-	};
-	if (caption) params["caption"] = caption;
-	const rec = await igRequest({ method: "POST", path: `/${igUserId}/media`, token, params });
-	const id = strField({ rec: rec, name: "id" });
-	if (!id) throw new Error("Instagram tidak mengembalikan container id");
-	return id;
 }
 
 async function pollContainer({
@@ -326,15 +309,13 @@ export async function publishReel(opts: PublishReelOpts): Promise<{
 }> {
 	const pollIntervalMs = opts.pollIntervalMs ?? 5000;
 	opts.onStage?.("upload");
-	const uploadUrl = await startResumableUpload({ igUserId: opts.igUserId, token: opts.accessToken });
-	await uploadBytes({ uploadUrl, token: opts.accessToken, videoBytes: opts.videoBytes });
-	opts.onStage?.("processing");
-	const containerId = await createReelContainer({
+	const { containerId, uploadUri } = await createReelUploadSession({
 		igUserId: opts.igUserId,
 		token: opts.accessToken,
 		caption: opts.caption,
-		videoUrl: uploadUrl,
 	});
+	await uploadBytes({ uploadUri, token: opts.accessToken, videoBytes: opts.videoBytes });
+	opts.onStage?.("processing");
 	await pollContainer({ containerId, token: opts.accessToken, pollIntervalMs });
 	const permalink = await publishContainer({
 		igUserId: opts.igUserId,

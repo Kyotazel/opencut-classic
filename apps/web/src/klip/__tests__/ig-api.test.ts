@@ -8,7 +8,7 @@ function jsonResponse({ body, status }: { body: unknown; status?: number }): Res
 	});
 }
 
-const BASE = "https://graph.instagram.com/v24.0";
+const BASE = "https://graph.instagram.com/v26.0";
 
 describe("ig-api publishReel", () => {
 	beforeEach(() => {
@@ -21,18 +21,16 @@ describe("ig-api publishReel", () => {
 			const u = String(url);
 			const method = init?.method ?? "GET";
 			calls.push(`${method} ${u.split("?")[0]}`);
-			if (u.startsWith(`${BASE}/123/video`)) {
-				return jsonResponse({ body: { upload_url: "https://upload.example/v1" } })
-			}
-			if (u.startsWith("https://upload.example/")) {
-				expect(method).toBe("PUT");
-				return jsonResponse({ body: { success: true } })
-			}
 			if (u.startsWith(`${BASE}/123/media_publish`)) {
 				return jsonResponse({ body: { id: "media-9" } })
 			}
 			if (u.startsWith(`${BASE}/123/media`)) {
-				return jsonResponse({ body: { id: "container-1" } })
+				expect(method).toBe("POST");
+				return jsonResponse({ body: { id: "container-1", uri: "https://rupload.example/v26.0/container-1" } })
+			}
+			if (u.startsWith("https://rupload.example/")) {
+				expect(method).toBe("POST");
+				return new Response(null, { status: 200 })
 			}
 			if (u.startsWith(`${BASE}/container-1`)) {
 				return jsonResponse({ body: { status_code: "FINISHED" } })
@@ -59,9 +57,10 @@ describe("ig-api publishReel", () => {
 	test("container ERROR melempar pesan Meta", async () => {
 		__setFetchMock(async (url: string | URL | Request) => {
 			const u = String(url);
-			if (u.includes("/123/video")) return jsonResponse({ body: { upload_url: "https://upload.example/v1" } })
-			if (u.startsWith("https://upload.example/")) return jsonResponse({ body: { success: true } })
-			if (u.includes("/123/media")) return jsonResponse({ body: { id: "container-2" } })
+			if (u.includes("/123/media")) {
+				return jsonResponse({ body: { id: "container-2", uri: "https://rupload.example/v26.0/container-2" } })
+			}
+			if (u.startsWith("https://rupload.example/")) return new Response(null, { status: 200 })
 			return jsonResponse({ body: { status_code: "ERROR", status: "Video tidak valid" } })
 		});
 		await expect(

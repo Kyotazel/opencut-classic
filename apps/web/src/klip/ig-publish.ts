@@ -14,7 +14,8 @@ import { decryptToken } from "@/klip/ig-token";
 import { publishReel } from "@/klip/ig-api";
 
 export const PUBLISH_DIR = "publishes";
-export const MAX_PUBLISH_BYTES = 500 * 1024 * 1024;
+// Batas Reels menurut docs Meta: 300MB.
+export const MAX_PUBLISH_BYTES = 300 * 1024 * 1024;
 export const MAX_PUBLISH_ACCOUNTS = 10;
 export const MAX_CAPTION_LENGTH = 2200;
 
@@ -85,7 +86,7 @@ export function validateVideoFile({ file }: { file: unknown }): File {
 		throw new IgPublishError({ message: "file kosong" });
 	}
 	if (file.size > MAX_PUBLISH_BYTES) {
-		throw new IgPublishError({ message: "file maksimal 500MB", status: 413 });
+		throw new IgPublishError({ message: "file maksimal 300MB (batas Reels)", status: 413 });
 	}
 	return file;
 }
