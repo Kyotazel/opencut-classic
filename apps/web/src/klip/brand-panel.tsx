@@ -394,7 +394,7 @@ export function BrandPanel() {
 				if (found) {
 					setLayers((prev) =>
 						prev.map((l) =>
-							l.id === id ? { ...l, elementId: found!.elementId, trackId: found!.trackId } : l,
+							l.id === draft.id ? { ...l, elementId: found!.elementId, trackId: found!.trackId } : l,
 						),
 					);
 				}
