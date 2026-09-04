@@ -667,9 +667,58 @@ function ServerProjectsSection({ localIds }: { localIds: string[] }) {
 		}
 	};
 
+	const handleDelete = async ({ id, name }: { id: string; name: string }) => {
+		if (!confirm(`Hapus "${name}" dari server? File media ikut terhapus. Tidak bisa dibatalkan.`)) {
+			return;
+		}
+		try {
+			const res = await fetch(`/api/sync/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+			if (!res.ok) throw new Error(`Hapus gagal: ${res.status}`);
+			setItems((prev) => (prev ?? []).filter((s) => s.id !== id));
+			toast.success(`"${name}" dihapus dari server`);
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : "Hapus gagal");
+		}
+	};
+
+	const handleDeleteAll = async ({ count }: { count: number }) => {
+		if (
+			!confirm(
+				`Hapus SEMUA ${count} project dari server beserta medianya? Tidak bisa dibatalkan.`,
+			)
+		) {
+			return;
+		}
+		let ok = 0;
+		let failed = 0;
+		for (const s of items ?? []) {
+			try {
+				const res = await fetch(`/api/sync/projects/${encodeURIComponent(s.id)}`, {
+					method: "DELETE",
+				});
+				if (!res.ok) throw new Error(`Hapus gagal: ${res.status}`);
+				ok += 1;
+				setItems((prev) => (prev ?? []).filter((x) => x.id !== s.id));
+			} catch (error) {
+				failed += 1;
+				console.warn(`Hapus ${s.name} gagal:`, error);
+			}
+		}
+		if (failed === 0) {
+			toast.success(`${ok} project dihapus dari server. Fresh!`);
+		} else {
+			toast.warning(`${ok} terhapus, ${failed} gagal. Coba Hapus semua lagi.`);
+		}
+	};
+
 	return (
 		<div className="flex flex-col gap-2 px-4">
-			<p className="text-sm font-medium">Di server ({onlyServer.length})</p>
+			<div className="flex items-center justify-between">
+				<p className="text-sm font-medium">Di server ({onlyServer.length})</p>
+				<Button size="sm" variant="destructive" onClick={() => void handleDeleteAll({ count: onlyServer.length })}>
+					Hapus semua
+				</Button>
+			</div>
 			{onlyServer.map((s) => (
 				<Card key={s.id}>
 					<CardContent className="flex items-center gap-3 py-3">
@@ -686,6 +735,13 @@ function ServerProjectsSection({ localIds }: { localIds: string[] }) {
 							onClick={() => void handleOpen({ id: s.id })}
 						>
 							{opening === s.id ? "Menarik..." : "Buka"}
+						</Button>
+						<Button
+							size="sm"
+							variant="ghost"
+							onClick={() => void handleDelete({ id: s.id, name: s.name })}
+						>
+							Hapus
 						</Button>
 					</CardContent>
 				</Card>

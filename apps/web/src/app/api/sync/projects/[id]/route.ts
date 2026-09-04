@@ -1,6 +1,9 @@
+import { unlink } from "node:fs/promises";
+import path from "node:path";
 import { type NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
-import { db, klipSyncProjects } from "@/db";
+import { db, klipSyncMedia, klipSyncProjects } from "@/db";
+import { dataRoot } from "@/klip/upload";
 
 const MAX_JSON_BYTES = 50 * 1024 * 1024;
 
@@ -85,4 +88,21 @@ export async function PUT(
 		.set({ name: name.slice(0, 255), data, updatedAt: now })
 		.where(eq(klipSyncProjects.id, id));
 	return NextResponse.json({ updatedAt: now });
+}
+
+// eslint-disable-next-line opencut/prefer-object-params
+export async function DELETE(
+	_request: NextRequest,
+	{ params }: { params: Promise<{ id: string }> },
+) {
+	const { id } = await params;
+	const mediaRows = await db
+		.select()
+		.from(klipSyncMedia)
+		.where(eq(klipSyncMedia.projectId, id));
+	for (const m of mediaRows) {
+		await unlink(path.join(dataRoot(), m.filePath)).catch(() => {});
+	}
+	await db.delete(klipSyncProjects).where(eq(klipSyncProjects.id, id));
+	return NextResponse.json({ ok: true });
 }
