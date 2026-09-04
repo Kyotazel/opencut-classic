@@ -1,6 +1,11 @@
 import { asc, eq, sql } from "drizzle-orm";
-import { db, klipBrandTemplateLayers, klipBrandTemplates } from "@/db";
-import { newBrandId } from "@/klip/brand";
+import { db, klipBrandLayers, klipBrandTemplateLayers, klipBrandTemplates, klipMedia, klipProjects } from "@/db";
+import { listLayers, newBrandId, rowToLayer } from "@/klip/brand";
+import {
+	resolveTemplateLayer,
+	resolveTotalDuration,
+	type TemplateAnchor,
+} from "@/klip/template-resolve";
 
 export type TemplateSummary = {
 	id: string;
@@ -80,14 +85,6 @@ export async function deleteTemplate({ id }: { id: string }) {
 	await db.delete(klipBrandTemplates).where(eq(klipBrandTemplates.id, id));
 	return true;
 }
-import { klipBrandLayers, klipMedia, klipProjects } from "@/db";
-import { listLayers, newBrandId, rowToLayer } from "@/klip/brand";
-import {
-	resolveTemplateLayer,
-	resolveTotalDuration,
-	type TemplateAnchor,
-} from "@/klip/template-resolve";
-
 export async function resolveMainDuration({
 	project,
 	override,
