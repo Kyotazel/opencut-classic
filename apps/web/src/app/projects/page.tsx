@@ -112,6 +112,7 @@ export default function ProjectsPage() {
 			<ProjectsHeader />
 			<ProjectsToolbar projectIds={projectsToDisplay.map((p) => p.id)} />
 			<main className="mx-auto px-4 pt-2 pb-6 flex flex-col gap-4">
+				{isInitialized && <ServerProjectsSection localIds={projectsToDisplay.map((p) => p.id)} />}
 				{isLoading || !isInitialized ? (
 					<ProjectsSkeleton />
 				) : projectsToDisplay.length === 0 ? (
@@ -601,6 +602,98 @@ function UploadZipButton() {
 	);
 }
 
+interface ServerProjectMeta {
+	id: string;
+	name: string;
+	updatedAt: string;
+}
+
+function ServerProjectsSection({ localIds }: { localIds: string[] }) {
+	const router = useRouter();
+	const [items, setItems] = useState<ServerProjectMeta[] | null>(null);
+	const [opening, setOpening] = useState<string | null>(null);
+
+	useEffect(() => {
+		fetch("/api/sync/projects")
+			.then((res) => {
+				if (!res.ok) throw new Error(`Sync status ${res.status}`);
+				return res.json();
+			})
+			.then((body: unknown) => {
+				const rec =
+					typeof body === "object" && body !== null && !Array.isArray(body)
+						? Object.fromEntries(Object.entries(body))
+						: null;
+				const list = rec?.["projects"];
+				if (!Array.isArray(list)) {
+					setItems([]);
+					return;
+				}
+				setItems(
+					list.flatMap((raw): ServerProjectMeta[] => {
+						if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return [];
+						const r = Object.fromEntries(Object.entries(raw));
+						if (typeof r["id"] !== "string" || typeof r["name"] !== "string") return [];
+						return [
+							{
+								id: r["id"],
+								name: r["name"],
+								updatedAt: typeof r["updatedAt"] === "string" ? r["updatedAt"] : "",
+							},
+						];
+					}),
+				);
+			})
+			.catch((error: unknown) => {
+				console.warn("Gagal memuat daftar server:", error);
+				setItems([]);
+			});
+	}, []);
+
+	if (items === null) return null;
+	const onlyServer = items.filter((s) => !localIds.includes(s.id));
+	if (onlyServer.length === 0) return null;
+
+	const handleOpen = async ({ id }: { id: string }) => {
+		if (opening) return;
+		setOpening(id);
+		try {
+			const { pullProject } = await import("@/klip/sync");
+			await pullProject({ id });
+			router.push(`/editor/${id}`);
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : "Gagal menarik dari server");
+			setOpening(null);
+		}
+	};
+
+	return (
+		<div className="flex flex-col gap-2 px-4">
+			<p className="text-sm font-medium">Di server ({onlyServer.length})</p>
+			{onlyServer.map((s) => (
+				<Card key={s.id}>
+					<CardContent className="flex items-center gap-3 py-3">
+						<div className="min-w-0 flex-1">
+							<p className="truncate text-sm font-medium">{s.name}</p>
+							<p className="text-muted-foreground text-xs">
+								Hanya ada di server — klik Buka untuk menarik ke browser ini
+							</p>
+						</div>
+						<Button
+							size="sm"
+							variant="outline"
+							disabled={opening === s.id}
+							onClick={() => void handleOpen({ id: s.id })}
+						>
+							{opening === s.id ? "Menarik..." : "Buka"}
+						</Button>
+					</CardContent>
+				</Card>
+			))}
+		</div>
+	);
+}
+
 function SyncUploadButton() {
 	const [busy, setBusy] = useState(false);
 
@@ -613,19 +706,25 @@ function SyncUploadButton() {
 			const metas = await storageService.loadAllProjectsMetadata();
 			let ok = 0;
 			const failed: string[] = [];
+			let firstError = "";
 			for (const meta of metas) {
 				try {
 					await pushProject({ id: meta.id });
 					ok += 1;
 				} catch (error) {
 					failed.push(meta.name);
+					const message = error instanceof Error ? error.message : String(error);
+					if (!firstError) firstError = message;
 					console.warn(`Upload ${meta.name} gagal:`, error);
 				}
 			}
 			if (failed.length === 0) {
 				toast.success(`${ok} project terupload ke server`);
 			} else {
-				toast.warning(`${ok} terupload, ${failed.length} gagal: ${failed.join(", ")}`);
+				toast.warning(`${ok} terupload, ${failed.length} gagal: ${failed.join(", ")}`, {
+					description: firstError ? `Contoh error: ${firstError.slice(0, 300)}` : undefined,
+					duration: 15000,
+				});
 			}
 		} finally {
 			setBusy(false);
