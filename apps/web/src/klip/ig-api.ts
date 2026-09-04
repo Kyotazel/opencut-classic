@@ -163,16 +163,43 @@ function childRecord({
 	return Object.fromEntries(Object.entries(v));
 }
 
-function igError({ status, rec }: { status: number; rec: Record<string, unknown> }): Error {
-	const errRec = childRecord({ rec, name: "error" });
+function snippet({ text }: { text: string }): string {
+	const oneLine = text.replace(/\s+/g, " ").slice(0, 300);
+	return oneLine ? ` | respons: ${oneLine}` : " | respons kosong";
+}
+
+function igError({
+	status,
+	rec,
+	where,
+}: {
+	status: number;
+	rec: Record<string, unknown> | null;
+	where: string;
+}): Error {
+	const errRec = rec ? childRecord({ rec, name: "error" }) : null;
 	const fromErr = errRec ? strField({ rec: errRec, name: "message" }) : null;
-	const fallback = strField({ rec, name: "message" }) ?? strField({ rec, name: "status" });
+	const fallback = rec
+		? (strField({ rec, name: "message" }) ?? strField({ rec, name: "status" }))
+		: null;
 	const detail = fromErr ?? fallback ?? `HTTP ${status}`;
 	const code = errRec?.["code"];
 	if (status === 401 || code === 190) {
-		return new Error(`IG_TOKEN_INVALID: ${detail}`);
+		return new Error(`IG_TOKEN_INVALID: ${detail} (${where})`);
 	}
-	return new Error(`Instagram API gagal: ${detail}`);
+	return new Error(`Instagram API gagal [${where}]: ${detail}`);
+}
+
+function parseJsonObject({ text }: { text: string }): Record<string, unknown> | null {
+	if (!text) return null;
+	let value: unknown;
+	try {
+		value = JSON.parse(text);
+	} catch {
+		return null;
+	}
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+	return Object.fromEntries(Object.entries(value));
 }
 
 async function igRequest({
@@ -190,14 +217,30 @@ async function igRequest({
 	body?: BodyInit;
 	headers?: Record<string, string>;
 }): Promise<Record<string, unknown>> {
+	const where = `${method} ${path}`;
 	const q = new URLSearchParams({ access_token: token, ...(params ?? {}) });
-	const res = await fetchImpl(`${IG_API_BASE}/${IG_API_VERSION}${path}?${q.toString()}`, {
-		method,
-		body,
-		headers,
-	});
-	const rec = asRecord({ value: await res.json().catch(() => null) });
-	if (!res.ok) throw igError({ status: res.status, rec });
+	let res: Response;
+	try {
+		res = await fetchImpl(`${IG_API_BASE}/${IG_API_VERSION}${path}?${q.toString()}`, {
+			method,
+			body,
+			headers,
+		});
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "jaringan gagal";
+		throw new Error(`Instagram API gagal [${where}]: jaringan/server tak terjangkau (${message})`);
+	}
+	const text = await res.text().catch(() => "");
+	const rec = parseJsonObject({ text });
+	if (!res.ok || !rec) {
+		console.error(`[ig-api] ${where} -> HTTP ${res.status}${snippet({ text })}`);
+	}
+	if (!rec) {
+		throw new Error(
+			`Instagram API gagal [${where}]: respons bukan JSON object (HTTP ${res.status})${snippet({ text })}`,
+		);
+	}
+	if (!res.ok) throw igError({ status: res.status, rec, where });
 	return rec;
 }
 
@@ -244,8 +287,9 @@ async function uploadBytes({
 		body: videoBytes,
 	});
 	if (!res.ok) {
-		const rec = asRecord({ value: await res.json().catch(() => null) });
-		throw igError({ status: res.status, rec });
+		const text = await res.text().catch(() => "");
+		console.error(`[ig-api] POST rupload -> HTTP ${res.status}${snippet({ text })}`);
+		throw igError({ status: res.status, rec: parseJsonObject({ text }), where: "POST rupload" });
 	}
 }
 

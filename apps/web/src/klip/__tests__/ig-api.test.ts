@@ -140,6 +140,19 @@ describe("ig-api publishReel", () => {
 		).rejects.toThrow("KLIP_PUBLIC_BASE_URL");
 	});
 
+	test("respons non-JSON menyebut tahap dan status", async () => {
+		__setFetchMock(async () => new Response("<html>blocked</html>", { status: 502 }));
+		await expect(
+			publishReel({
+				igUserId: "123",
+				accessToken: "tok",
+				caption: "",
+				videoBytes: new Uint8Array([1]).buffer,
+				pollIntervalMs: 1,
+			}),
+		).rejects.toThrow("POST /123/media");
+	});
+
 	test("401 menandai token invalid", async () => {
 		__setFetchMock(async () =>
 			jsonResponse({ body: { error: { message: "invalid", code: 190 } }, status: 401 }),
