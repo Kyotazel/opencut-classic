@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
 			error instanceof Error ? error.message : "Gagal menghubungkan akun";
 		return fail({ message, status: 500 });
 	}
-	const res = NextResponse.redirect(new URL("/projects?ig=connected", request.url));
+	const res = NextResponse.redirect(new URL("/instagram?connected=1", request.url));
 	res.cookies.delete("ig_oauth_state");
 	return res;
 }

@@ -186,6 +186,11 @@ function ProjectsHeader() {
 				<div className="flex items-center gap-3 md:gap-4">
 					<SearchBar className="hidden md:block" />
 					<UploadZipButton />
+					<Link href="/instagram">
+						<Button variant="outline" size="sm">
+							<span className="text-sm font-medium hidden md:block">Instagram</span>
+						</Button>
+					</Link>
 					<NewProjectButton />
 				</div>
 			</div>
