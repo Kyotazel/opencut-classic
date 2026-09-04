@@ -63,6 +63,10 @@ export function BrandPanel() {
 	const [loading, setLoading] = useState(true);
 	const [uploading, setUploading] = useState(false);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [templates, setTemplates] = useState<Array<{ id: string; name: string; layerCount: number }>>([]);
+	const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+	const [templateName, setTemplateName] = useState("");
+	const [applying, setApplying] = useState(false);
 	const fileRef = useRef<HTMLInputElement>(null);
 
 	const opencutRef = project?.metadata.id ?? null;
@@ -113,6 +117,18 @@ export function BrandPanel() {
 	useEffect(() => {
 		setLoading(true);
 		void refresh();
+		void (async () => {
+			try {
+				const res = await fetch("/api/klip/brand-templates");
+				if (!res.ok) return;
+				const body = (await res.json()) as {
+					templates: Array<{ id: string; name: string; layerCount: number }>;
+				};
+				setTemplates(body.templates);
+			} catch (error) {
+				console.error("Brand panel: failed to load templates", error);
+			}
+		})();
 	}, [refresh]);
 
 	const patchLayer = useCallback(
@@ -308,10 +324,8 @@ export function BrandPanel() {
 		[klipProjectId, refresh],
 	);
 
-	const handleAddToTimeline = useCallback(
-		async ({ id }: { id: string }) => {
-			const draft = layers.find((l) => l.id === id);
-			if (!draft) return;
+	const insertDraftToTimeline = useCallback(
+		async ({ draft }: { draft: Draft }) => {
 			if (!project) {
 				toast.error("No active project");
 				return;
@@ -390,8 +404,83 @@ export function BrandPanel() {
 				toast.error("Failed to add to timeline");
 			}
 		},
-		[canvasHeight, canvasWidth, editor, layers, totalDuration],
+		[canvasHeight, canvasWidth, editor, totalDuration],
 	);
+
+	const handleAddToTimeline = useCallback(
+		({ id }: { id: string }) => {
+			const draft = layers.find((l) => l.id === id);
+			if (!draft) return;
+			void insertDraftToTimeline({ draft });
+		},
+		[layers, insertDraftToTimeline],
+	);
+
+	const handleSaveAsTemplate = useCallback(async () => {
+		if (!klipProjectId || !templateName.trim()) return;
+		try {
+			const res = await fetch(`/api/klip/projects/${klipProjectId}/save-as-template`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ name: templateName.trim() }),
+			});
+			if (!res.ok) {
+				const body = (await res.json().catch(() => null)) as { error?: string } | null;
+				throw new Error(body?.error ?? `Save failed: ${res.status}`);
+			}
+			const body = (await res.json()) as {
+				template: { id: string; name: string };
+				layerCount: number;
+			};
+			setTemplates((prev) => [...prev, { ...body.template, layerCount: body.layerCount }]);
+			setSelectedTemplateId(body.template.id);
+			setTemplateName("");
+			toast.success(`Template "${body.template.name}" saved`);
+		} catch (error) {
+			console.error("Brand panel: save-as-template failed", error);
+			toast.error(error instanceof Error ? error.message : "Save failed");
+		}
+	}, [klipProjectId, templateName]);
+
+	const handleApplyTemplate = useCallback(async () => {
+		if (!klipProjectId || !selectedTemplateId || !project) return;
+		setApplying(true);
+		try {
+			const res = await fetch(`/api/klip/projects/${klipProjectId}/apply-template`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ templateId: selectedTemplateId }),
+			});
+			if (!res.ok) {
+				const body = (await res.json().catch(() => null)) as { error?: string } | null;
+				throw new Error(body?.error ?? `Apply failed: ${res.status}`);
+			}
+			const body = (await res.json()) as { layers: KlipBrandLayer[]; totalDuration: number };
+			const drafts: Draft[] = body.layers.map((l) => ({
+				...l,
+				elementId: null,
+				trackId: null,
+			}));
+			setLayers(drafts);
+			// Sekuensial: insert memakai diff id sebelum/sesudah, concurrent akan merusak diff.
+			for (const draft of drafts) {
+				await insertDraftToTimeline({ draft });
+			}
+			if (body.totalDuration > totalDuration) {
+				toast.info(
+					`Template extends timeline to ${body.totalDuration.toFixed(1)}s - extend the project duration to match.`,
+				);
+			} else {
+				toast.success("Template applied");
+			}
+		} catch (error) {
+			console.error("Brand panel: apply-template failed", error);
+			toast.error(error instanceof Error ? error.message : "Apply failed");
+			void refresh();
+		} finally {
+			setApplying(false);
+		}
+	}, [insertDraftToTimeline, klipProjectId, project, refresh, selectedTemplateId, totalDuration]);
 
 	const selected = layers.find((l) => l.id === selectedId) ?? null;
 
@@ -405,6 +494,49 @@ export function BrandPanel() {
 
 	return (
 		<div className="flex h-full flex-col">
+			<div className="flex flex-col gap-2 border-b p-2">
+				<div className="flex items-center gap-2">
+					<select
+						className="bg-background min-w-0 flex-1 rounded-md border px-2 py-1.5 text-xs"
+						value={selectedTemplateId}
+						onChange={(e) => setSelectedTemplateId(e.target.value)}
+						disabled={applying || !klipProjectId}
+						title="Brand template"
+					>
+						<option value="">Select template...</option>
+						{templates.map((t) => (
+							<option key={t.id} value={t.id}>
+								{t.name} ({t.layerCount})
+							</option>
+						))}
+					</select>
+					<Button
+						size="sm"
+						variant="secondary"
+						disabled={applying || !klipProjectId || !selectedTemplateId}
+						onClick={() => void handleApplyTemplate()}
+					>
+						{applying ? <Spinner className="size-4" /> : "Apply"}
+					</Button>
+				</div>
+				<div className="flex items-center gap-2">
+					<Input
+						placeholder="Template name..."
+						value={templateName}
+						onChange={(e) => setTemplateName(e.target.value)}
+						disabled={!klipProjectId}
+						className="h-8 text-xs"
+					/>
+					<Button
+						size="sm"
+						variant="ghost"
+						disabled={!klipProjectId || !templateName.trim()}
+						onClick={() => void handleSaveAsTemplate()}
+					>
+						Save as
+					</Button>
+				</div>
+			</div>
 			<div className="flex items-center gap-2 border-b p-2">
 				<input
 					ref={fileRef}
