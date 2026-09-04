@@ -87,6 +87,7 @@ export const klipProjects = mysqlTable("klip_projects", {
 	name: varchar("name", { length: 255 }).notNull(),
 	batchId: varchar("batch_id", { length: 64 }),
 	sourceMediaId: varchar("source_media_id", { length: 64 }),
+	caption: text("caption"),
 	status: varchar("status", { length: 32 }).default("ready").notNull(),
 	opencutRef: varchar("opencut_ref", { length: 64 }),
 	duration: double("duration"),
@@ -187,3 +188,71 @@ export const verifications = mysqlTable("verifications", {
 		() => /* @__PURE__ */ new Date(),
 	),
 });
+
+export const klipIgAccounts = mysqlTable("klip_ig_accounts", {
+	id: varchar("id", { length: 64 }).primaryKey(),
+	igUserId: varchar("ig_user_id", { length: 64 }).notNull().unique(),
+	username: varchar("username", { length: 255 }).notNull(),
+	profilePicUrl: text("profile_pic_url"),
+	accessTokenEnc: text("access_token_enc").notNull(),
+	tokenExpiresAt: timestamp("token_expires_at"),
+	status: mysqlEnum("status", ["active", "token_expired", "disconnected"])
+		.default("active")
+		.notNull(),
+	createdAt: timestamp("created_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+	updatedAt: timestamp("updated_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+});
+
+export type KlipIgAccount = typeof klipIgAccounts.$inferSelect;
+
+export const klipIgPublishes = mysqlTable("klip_ig_publishes", {
+	id: varchar("id", { length: 64 }).primaryKey(),
+	projectId: varchar("project_id", { length: 64 })
+		.notNull()
+		.references(() => klipProjects.id, { onDelete: "cascade" }),
+	caption: text("caption"),
+	videoPath: varchar("video_path", { length: 1024 }).notNull(),
+	status: mysqlEnum("status", ["processing", "done", "partial", "failed"])
+		.default("processing")
+		.notNull(),
+	createdAt: timestamp("created_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+	updatedAt: timestamp("updated_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+});
+
+export type KlipIgPublish = typeof klipIgPublishes.$inferSelect;
+
+export const klipIgPublishItems = mysqlTable("klip_ig_publish_items", {
+	id: varchar("id", { length: 64 }).primaryKey(),
+	publishId: varchar("publish_id", { length: 64 })
+		.notNull()
+		.references(() => klipIgPublishes.id, { onDelete: "cascade" }),
+	igAccountId: varchar("ig_account_id", { length: 64 })
+		.notNull()
+		.references(() => klipIgAccounts.id, { onDelete: "cascade" }),
+	containerId: varchar("container_id", { length: 128 }),
+	status: mysqlEnum("status", [
+		"queued",
+		"uploading",
+		"processing",
+		"published",
+		"failed",
+	])
+		.default("queued")
+		.notNull(),
+	permalink: text("permalink"),
+	error: text("error"),
+	attempts: int("attempts").default(0).notNull(),
+	createdAt: timestamp("created_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+});
+
+export type KlipIgPublishItem = typeof klipIgPublishItems.$inferSelect;
