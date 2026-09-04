@@ -1,0 +1,195 @@
+import type { MediaType } from "@/media/types";
+import type { SerializedProject } from "@/services/storage/types";
+
+// Dynamic import: modul storage menarik opencut-wasm yang tidak ada di env test.
+async function getStorageService() {
+	const mod = await import("@/services/storage/service");
+	return mod.storageService;
+}
+
+const BASE_PREFIX = "klip_sync_base:";
+
+export class SyncConflictError extends Error {
+	serverUpdatedAt: string;
+
+	constructor({ serverUpdatedAt }: { serverUpdatedAt: string }) {
+		super("Server menyimpan versi lebih baru");
+		this.name = "SyncConflictError";
+		this.serverUpdatedAt = serverUpdatedAt;
+	}
+}
+
+export function getSyncBase({ id }: { id: string }): string | null {
+	if (typeof localStorage === "undefined") return null;
+	try {
+		return localStorage.getItem(`${BASE_PREFIX}${id}`);
+	} catch {
+		return null;
+	}
+}
+
+export function setSyncBase({ id, updatedAt }: { id: string; updatedAt: string }): void {
+	if (typeof localStorage === "undefined") return;
+	try {
+		localStorage.setItem(`${BASE_PREFIX}${id}`, updatedAt);
+	} catch {
+		// abaikan (mode privat dsb), sync tetap jalan tanpa penanda base
+	}
+}
+
+function isRecord({ value }: { value: unknown }): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function readError({ res, fallback }: { res: Response; fallback: string }): Promise<string> {
+	try {
+		const body: unknown = await res.json();
+		if (!isRecord({ value: body })) return `${fallback}: ${res.status}`;
+		const err = body["error"];
+		return typeof err === "string" ? err : `${fallback}: ${res.status}`;
+	} catch {
+		return `${fallback}: ${res.status}`;
+	}
+}
+
+function mediaTypeFromMime({ mime }: { mime: string }): MediaType | null {
+	if (mime.startsWith("video/")) return "video";
+	if (mime.startsWith("image/")) return "image";
+	if (mime.startsWith("audio/")) return "audio";
+	return null;
+}
+
+export async function pullProject({ id }: { id: string }): Promise<{
+	pulled: boolean;
+	skippedMedia: number;
+}> {
+	const res = await fetch(`/api/sync/projects/${encodeURIComponent(id)}`);
+	if (res.status === 404) return { pulled: false, skippedMedia: 0 };
+	if (!res.ok) throw new Error(await readError({ res, fallback: "Gagal mengambil project" }));
+	const body: unknown = await res.json();
+	const rec = isRecord({ value: body }) ? body : null;
+	const data = rec?.["data"];
+	const serverUpdatedAt = rec?.["updatedAt"];
+	if (typeof data !== "string" || typeof serverUpdatedAt !== "string") {
+		throw new Error("Respons server tidak valid");
+	}
+	let serialized: SerializedProject;
+	try {
+		serialized = JSON.parse(data);
+	} catch {
+		throw new Error("Data project server rusak");
+	}
+	const meta: unknown = serialized.metadata;
+	if (!isRecord({ value: meta }) || meta["id"] !== id) {
+		throw new Error("Data project server tidak cocok");
+	}
+	const storage = await getStorageService();
+	await storage.putSerializedProject({ project: serialized });
+	const mediaRes = await fetch(`/api/sync/projects/${encodeURIComponent(id)}/media`);
+	if (!mediaRes.ok) throw new Error(await readError({ res: mediaRes, fallback: "Gagal mengambil daftar media" }));
+	const mediaBody: unknown = await mediaRes.json();
+	const mediaRec = isRecord({ value: mediaBody }) ? mediaBody : null;
+	const list = mediaRec?.["media"];
+	const items = Array.isArray(list) ? list : [];
+	let skippedMedia = 0;
+	for (const raw of items) {
+		if (!isRecord({ value: raw })) {
+			skippedMedia += 1;
+			continue;
+		}
+		if (typeof raw["id"] !== "string" || typeof raw["mime"] !== "string") {
+			skippedMedia += 1;
+			continue;
+		}
+		const type = mediaTypeFromMime({ mime: raw["mime"] });
+		if (!type) {
+			skippedMedia += 1;
+			continue;
+		}
+		const storage = await getStorageService();
+		const existing = await storage.loadMediaAsset({ projectId: id, id: raw["id"] });
+		if (existing) continue;
+		const fileRes = await fetch(`/api/sync/media/${encodeURIComponent(raw["id"])}`);
+		if (!fileRes.ok) {
+			skippedMedia += 1;
+			continue;
+		}
+		const bytes = await fileRes.arrayBuffer();
+		await storage.saveMediaAsset({
+			projectId: id,
+			mediaAsset: {
+				id: raw["id"],
+				name: raw["id"],
+				type,
+				file: new File([bytes], raw["id"], { type: raw["mime"] }),
+			},
+		});
+	}
+	setSyncBase({ id, updatedAt: serverUpdatedAt });
+	return { pulled: true, skippedMedia };
+}
+
+export async function pushProject({
+	id,
+	forceBase,
+}: {
+	id: string;
+	forceBase?: string;
+}): Promise<{ updatedAt: string }> {
+	const storage = await getStorageService();
+	const serialized = await storage.getSerializedProject({ id });
+	if (!serialized) throw new Error("Project tidak ada di browser ini");
+	const res = await fetch(`/api/sync/projects/${encodeURIComponent(id)}`, {
+		method: "PUT",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			name: serialized.metadata.name,
+			data: JSON.stringify(serialized),
+			baseUpdatedAt: forceBase ?? getSyncBase({ id }),
+		}),
+	});
+	if (res.status === 409) {
+		let serverUpdatedAt = "";
+		try {
+			const body: unknown = await res.json();
+			if (isRecord({ value: body }) && typeof body["serverUpdatedAt"] === "string") {
+				serverUpdatedAt = body["serverUpdatedAt"];
+			}
+		} catch {
+			// abaikan
+		}
+		throw new SyncConflictError({ serverUpdatedAt });
+	}
+	if (!res.ok) throw new Error(await readError({ res, fallback: "Gagal menyimpan project" }));
+	const body: unknown = await res.json();
+	const rec = isRecord({ value: body }) ? body : null;
+	if (typeof rec?.["updatedAt"] !== "string") throw new Error("Respons server tidak valid");
+	const updatedAt = rec["updatedAt"];
+
+	const mediaRes = await fetch(`/api/sync/projects/${encodeURIComponent(id)}/media`);
+	const serverIds = new Set<string>();
+	if (mediaRes.ok) {
+		const mediaBody: unknown = await mediaRes.json();
+		const mediaRec = isRecord({ value: mediaBody }) ? mediaBody : null;
+		const list = mediaRec?.["media"];
+		if (Array.isArray(list)) {
+			for (const raw of list) {
+				if (isRecord({ value: raw }) && typeof raw["id"] === "string") serverIds.add(raw["id"]);
+			}
+		}
+	}
+	const localAssets = await storage.loadAllMediaAssets({ projectId: id });
+	for (const asset of localAssets) {
+		if (serverIds.has(asset.id)) continue;
+		const form = new FormData();
+		form.set("assetId", asset.id);
+		form.set("file", asset.file);
+		const up = await fetch(`/api/sync/projects/${encodeURIComponent(id)}/media`, {
+			method: "POST",
+			body: form,
+		});
+		if (!up.ok) throw new Error(await readError({ res: up, fallback: `Gagal mengunggah media ${asset.id}` }));
+	}
+	setSyncBase({ id, updatedAt });
+	return { updatedAt };
+}

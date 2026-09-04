@@ -167,6 +167,22 @@ class StorageService {
 		});
 	}
 
+	async getSerializedProject({
+		id,
+	}: {
+		id: string;
+	}): Promise<SerializedProject | null> {
+		return this.projectsAdapter.get(id);
+	}
+
+	async putSerializedProject({
+		project,
+	}: {
+		project: SerializedProject;
+	}): Promise<void> {
+		await this.projectsAdapter.set({ key: project.metadata.id, value: project });
+	}
+
 	async loadProject({
 		id,
 	}: {
