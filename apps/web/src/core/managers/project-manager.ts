@@ -57,6 +57,7 @@ export class ProjectManager {
 		result: null,
 	};
 	private exportCancelRequested = false;
+	private syncConflict: { projectId: string; serverUpdatedAt: string } | null = null;
 
 	constructor(private editor: EditorCore) {}
 
@@ -137,6 +138,12 @@ export class ProjectManager {
 		this.editor.scenes.clearScenes();
 
 		try {
+			await this.pullFromServerIfNewer({ id });
+		} catch (error) {
+			console.warn("Sync pull gagal, pakai data lokal:", error);
+		}
+
+		try {
 			const result = await storageService.loadProject({ id });
 			if (!result) {
 				throw new Error(`Project with id ${id} not found`);
@@ -186,6 +193,44 @@ export class ProjectManager {
 		}
 	}
 
+	getSyncConflict(): { projectId: string; serverUpdatedAt: string } | null {
+		return this.syncConflict;
+	}
+
+	private async pullFromServerIfNewer({ id }: { id: string }): Promise<void> {
+		const res = await fetch(`/api/sync/projects/${encodeURIComponent(id)}`);
+		if (res.status === 404) return;
+		if (!res.ok) throw new Error(`Sync status ${res.status}`);
+		const body: unknown = await res.json();
+		const rec =
+			typeof body === "object" && body !== null && !Array.isArray(body)
+				? Object.fromEntries(Object.entries(body))
+				: null;
+		const updatedAt = rec?.["updatedAt"] ?? null;
+		if (typeof updatedAt !== "string") return;
+		const local = await storageService.loadProject({ id });
+		const localTime = local ? local.project.metadata.updatedAt.getTime() : 0;
+		if (Number(new Date(updatedAt).getTime()) > localTime) {
+			const sync = await import("@/klip/sync");
+			await sync.pullProject({ id });
+		}
+	}
+
+	async resolveSyncConflict({ choice }: { choice: "overwrite" | "reload" }): Promise<void> {
+		const conflict = this.syncConflict;
+		if (!conflict) return;
+		const sync = await import("@/klip/sync");
+		if (choice === "overwrite") {
+			await sync.pushProject({ id: conflict.projectId, forceBase: conflict.serverUpdatedAt });
+		} else {
+			await sync.pullProject({ id: conflict.projectId });
+			window.location.reload();
+			return;
+		}
+		this.syncConflict = null;
+		this.notify();
+	}
+
 	async saveCurrentProject(): Promise<void> {
 		if (!this.active) return;
 
@@ -204,6 +249,21 @@ export class ProjectManager {
 			await storageService.saveProject({ project: updatedProject });
 			this.active = updatedProject;
 			this.updateMetadata(updatedProject);
+			try {
+				const sync = await import("@/klip/sync");
+				await sync.pushProject({ id: updatedProject.metadata.id });
+			} catch (error) {
+				const syncMod = await import("@/klip/sync");
+				if (error instanceof syncMod.SyncConflictError) {
+					this.syncConflict = {
+						projectId: updatedProject.metadata.id,
+						serverUpdatedAt: error.serverUpdatedAt,
+					};
+					this.notify();
+				} else {
+					console.warn("Sync push gagal (data lokal aman):", error);
+				}
+			}
 		} catch (error) {
 			console.error("Failed to save project:", error);
 		}

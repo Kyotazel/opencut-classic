@@ -191,6 +191,8 @@ function ProjectsHeader() {
 							<span className="text-sm font-medium hidden md:block">Instagram</span>
 						</Button>
 					</Link>
+					<SyncUploadButton />
+					<LogoutButton />
 					<NewProjectButton />
 				</div>
 			</div>
@@ -596,6 +598,62 @@ function UploadZipButton() {
 				<span className="text-sm font-medium block md:hidden">Zip</span>
 			</Button>
 		</>
+	);
+}
+
+function SyncUploadButton() {
+	const [busy, setBusy] = useState(false);
+
+	const handleUpload = async () => {
+		if (busy) return;
+		setBusy(true);
+		try {
+			const { pushProject } = await import("@/klip/sync");
+			const { storageService } = await import("@/services/storage/service");
+			const metas = await storageService.loadAllProjectsMetadata();
+			let ok = 0;
+			const failed: string[] = [];
+			for (const meta of metas) {
+				try {
+					await pushProject({ id: meta.id });
+					ok += 1;
+				} catch (error) {
+					failed.push(meta.name);
+					console.warn(`Upload ${meta.name} gagal:`, error);
+				}
+			}
+			if (failed.length === 0) {
+				toast.success(`${ok} project terupload ke server`);
+			} else {
+				toast.warning(`${ok} terupload, ${failed.length} gagal: ${failed.join(", ")}`);
+			}
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	return (
+		<Button variant="outline" size="sm" disabled={busy} onClick={() => void handleUpload()}>
+			<span className="text-sm font-medium hidden md:block">
+				{busy ? "Mengupload..." : "Upload ke server"}
+			</span>
+		</Button>
+	);
+}
+
+function LogoutButton() {
+	return (
+		<Button
+			variant="ghost"
+			size="sm"
+			onClick={() => {
+				void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
+					window.location.href = "/";
+				});
+			}}
+		>
+			<span className="text-sm font-medium hidden md:block">Keluar</span>
+		</Button>
 	);
 }
 

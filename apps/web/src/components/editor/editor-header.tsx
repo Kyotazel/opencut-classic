@@ -39,9 +39,26 @@ export function EditorHeader() {
 				<FeedbackPopover />
 				<ExportButton />
 				<PublishButton />
+				<LogoutButton />
 				<ThemeToggle />
 			</nav>
 		</header>
+	);
+}
+
+function LogoutButton() {
+	return (
+		<Button
+			variant="ghost"
+			size="sm"
+			onClick={() => {
+				void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
+					window.location.href = "/";
+				});
+			}}
+		>
+			Keluar
+		</Button>
 	);
 }
 
