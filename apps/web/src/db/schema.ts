@@ -1,12 +1,12 @@
-import { pgTable, text, timestamp, boolean } from "drizzle-orm/pg-core";
+import { mysqlTable, text, timestamp, boolean, varchar } from "drizzle-orm/mysql-core";
 
-export const users = pgTable("users", {
-	id: text("id").primaryKey(),
+export const users = mysqlTable("users", {
+	id: varchar("id", { length: 64 }).primaryKey(),
 
 	// todo: implement fully anonymous sign-in for privacy
 	// we don't have any auth flows currently so this is fine for now
 	name: text("name").notNull(),
-	email: text("email").notNull().unique(),
+	email: varchar("email", { length: 255 }).notNull().unique(),
 	emailVerified: boolean("email_verified").default(false).notNull(),
 	image: text("image"),
 	createdAt: timestamp("created_at")
@@ -15,26 +15,26 @@ export const users = pgTable("users", {
 	updatedAt: timestamp("updated_at")
 		.$defaultFn(() => /* @__PURE__ */ new Date())
 		.notNull(),
-}).enableRLS();
+});
 
-export const sessions = pgTable("sessions", {
-	id: text("id").primaryKey(),
+export const sessions = mysqlTable("sessions", {
+	id: varchar("id", { length: 64 }).primaryKey(),
 	expiresAt: timestamp("expires_at").notNull(),
-	token: text("token").notNull().unique(),
+	token: varchar("token", { length: 255 }).notNull().unique(),
 	createdAt: timestamp("created_at").notNull(),
 	updatedAt: timestamp("updated_at").notNull(),
 	ipAddress: text("ip_address"),
 	userAgent: text("user_agent"),
-	userId: text("user_id")
+	userId: varchar("user_id", { length: 64 })
 		.notNull()
 		.references(() => users.id, { onDelete: "cascade" }),
-}).enableRLS();
+});
 
-export const accounts = pgTable("accounts", {
-	id: text("id").primaryKey(),
+export const accounts = mysqlTable("accounts", {
+	id: varchar("id", { length: 64 }).primaryKey(),
 	accountId: text("account_id").notNull(),
 	providerId: text("provider_id").notNull(),
-	userId: text("user_id")
+	userId: varchar("user_id", { length: 64 })
 		.notNull()
 		.references(() => users.id, { onDelete: "cascade" }),
 	accessToken: text("access_token"),
@@ -46,18 +46,18 @@ export const accounts = pgTable("accounts", {
 	password: text("password"),
 	createdAt: timestamp("created_at").notNull(),
 	updatedAt: timestamp("updated_at").notNull(),
-}).enableRLS();
+});
 
-export const feedback = pgTable("feedback", {
-	id: text("id").primaryKey(),
+export const feedback = mysqlTable("feedback", {
+	id: varchar("id", { length: 64 }).primaryKey(),
 	message: text("message").notNull(),
 	createdAt: timestamp("created_at")
 		.$defaultFn(() => new Date())
 		.notNull(),
 });
 
-export const verifications = pgTable("verifications", {
-	id: text("id").primaryKey(),
+export const verifications = mysqlTable("verifications", {
+	id: varchar("id", { length: 64 }).primaryKey(),
 	identifier: text("identifier").notNull(),
 	value: text("value").notNull(),
 	expiresAt: timestamp("expires_at").notNull(),
@@ -67,4 +67,4 @@ export const verifications = pgTable("verifications", {
 	updatedAt: timestamp("updated_at").$defaultFn(
 		() => /* @__PURE__ */ new Date(),
 	),
-}).enableRLS();
+});

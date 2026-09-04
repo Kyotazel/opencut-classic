@@ -1,14 +1,18 @@
-import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
+import { drizzle } from "drizzle-orm/mysql2";
+import mysql from "mysql2/promise";
 import * as schema from "./schema";
 import { webEnv } from "@/env/web";
 
-let _db: ReturnType<typeof drizzle> | null = null;
+function createDb() {
+	const pool = mysql.createPool(webEnv.DATABASE_URL);
+	return drizzle(pool, { schema, mode: "default" });
+}
 
-function getDb() {
+let _db: ReturnType<typeof createDb> | null = null;
+
+function getDb(): ReturnType<typeof createDb> {
 	if (!_db) {
-		const client = postgres(webEnv.DATABASE_URL);
-		_db = drizzle(client, { schema });
+		_db = createDb();
 	}
 
 	return _db;

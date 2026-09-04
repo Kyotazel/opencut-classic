@@ -12,9 +12,8 @@ const webEnvSchema = z.object({
 
 	// Server
 	DATABASE_URL: z.string().refine(
-		(url) =>
-			url.startsWith("postgres://") || url.startsWith("postgresql://"),
-		"DATABASE_URL must be a postgres:// or postgresql:// URL",
+		(url) => url.startsWith("mysql://"),
+		"DATABASE_URL must be a mysql:// URL",
 	),
 
 	BETTER_AUTH_SECRET: z.string(),

@@ -11,7 +11,7 @@ const redis = new Redis({
 
 export const auth = betterAuth({
 	database: drizzleAdapter(db, {
-		provider: "pg",
+		provider: "mysql",
 		usePlural: true,
 	}),
 	secret: webEnv.BETTER_AUTH_SECRET,
