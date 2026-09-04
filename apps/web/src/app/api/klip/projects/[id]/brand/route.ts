@@ -135,6 +135,7 @@ export async function POST(
 	const siblings = await listLayers({ projectId: id });
 	const maxZ = siblings.reduce((m, l) => Math.max(m, l.z), -1);
 	const layerId = newBrandId({ prefix: "lyr" });
+	const initial = sanitizePatch({ body: b });
 	await db.insert(klipBrandLayers).values({
 		id: layerId,
 		projectId: id,
@@ -142,18 +143,18 @@ export async function POST(
 		filePath: b.file,
 		name: typeof b.name === "string" && b.name.length > 0 ? b.name.slice(0, 255) : "Brand layer",
 		kind,
-		enabled: true,
-		x: typeof b.x === "number" ? b.x : 0.06,
-		y: typeof b.y === "number" ? b.y : 0.05,
-		scale: typeof b.scale === "number" ? Math.max(b.scale, 0.01) : 0.36,
-		rotate: 0,
-		opacity: 100,
-		full: true,
-		start: 0,
-		dur: 0,
-		volume: 0.35,
-		duck: false,
-		z: maxZ + 1,
+		enabled: typeof initial.enabled === "boolean" ? initial.enabled : true,
+		x: typeof initial.x === "number" ? initial.x : 0.06,
+		y: typeof initial.y === "number" ? initial.y : 0.05,
+		scale: typeof initial.scale === "number" ? initial.scale : 0.36,
+		rotate: typeof initial.rotate === "number" ? initial.rotate : 0,
+		opacity: typeof initial.opacity === "number" ? initial.opacity : 100,
+		full: typeof initial.full === "boolean" ? initial.full : true,
+		start: typeof initial.start === "number" ? initial.start : 0,
+		dur: typeof initial.dur === "number" ? initial.dur : 0,
+		volume: typeof initial.volume === "number" ? initial.volume : 0.35,
+		duck: typeof initial.duck === "boolean" ? initial.duck : false,
+		z: typeof initial.z === "number" ? Math.round(initial.z) : maxZ + 1,
 	});
 	const rows = await db
 		.select()
