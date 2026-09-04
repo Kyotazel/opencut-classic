@@ -256,3 +256,32 @@ export const klipIgPublishItems = mysqlTable("klip_ig_publish_items", {
 });
 
 export type KlipIgPublishItem = typeof klipIgPublishItems.$inferSelect;
+
+export const klipSyncProjects = mysqlTable("klip_sync_projects", {
+	id: varchar("id", { length: 64 }).primaryKey(),
+	name: varchar("name", { length: 255 }).notNull(),
+	data: text("data").notNull(),
+	createdAt: timestamp("created_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+	updatedAt: timestamp("updated_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+});
+
+export type KlipSyncProject = typeof klipSyncProjects.$inferSelect;
+
+export const klipSyncMedia = mysqlTable("klip_sync_media", {
+	id: varchar("id", { length: 128 }).primaryKey(),
+	projectId: varchar("project_id", { length: 64 })
+		.notNull()
+		.references(() => klipSyncProjects.id, { onDelete: "cascade" }),
+	filePath: varchar("file_path", { length: 1024 }).notNull(),
+	mime: varchar("mime", { length: 128 }).notNull(),
+	size: int("size").notNull(),
+	updatedAt: timestamp("updated_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+});
+
+export type KlipSyncMedia = typeof klipSyncMedia.$inferSelect;
