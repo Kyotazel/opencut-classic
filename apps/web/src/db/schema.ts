@@ -132,6 +132,49 @@ export const klipBrandLayers = mysqlTable("klip_brand_layers", {
 
 export type KlipBrandLayer = typeof klipBrandLayers.$inferSelect;
 
+export const klipBrandTemplates = mysqlTable("klip_brand_templates", {
+	id: varchar("id", { length: 64 }).primaryKey(),
+	name: varchar("name", { length: 255 }).notNull(),
+	createdAt: timestamp("created_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+	updatedAt: timestamp("updated_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+});
+
+export type KlipBrandTemplate = typeof klipBrandTemplates.$inferSelect;
+
+export const klipBrandTemplateLayers = mysqlTable("klip_brand_template_layers", {
+	id: varchar("id", { length: 64 }).primaryKey(),
+	// Inline FK agar DDL memuat ON DELETE CASCADE (pola klipBrandLayers.projectId).
+	templateId: varchar("template_id", { length: 64 })
+		.notNull()
+		.references(() => klipBrandTemplates.id, { onDelete: "cascade" }),
+	assetId: varchar("asset_id", { length: 64 }),
+	filePath: varchar("file_path", { length: 1024 }).notNull(),
+	name: varchar("name", { length: 255 }).notNull(),
+	kind: mysqlEnum("kind", ["image", "video", "audio"]).notNull(),
+	enabled: boolean("enabled").default(true).notNull(),
+	anchor: mysqlEnum("anchor", ["start", "main_end"]).default("start").notNull(),
+	x: double("x").default(0.06).notNull(),
+	y: double("y").default(0.05).notNull(),
+	scale: double("scale").default(0.36).notNull(),
+	rotate: double("rotate").default(0).notNull(),
+	opacity: int("opacity").default(100).notNull(),
+	full: boolean("full").default(true).notNull(),
+	start: double("start").default(0).notNull(),
+	dur: double("dur").default(0).notNull(),
+	volume: double("volume").default(0.35).notNull(),
+	duck: boolean("duck").default(false).notNull(),
+	z: int("z").default(0).notNull(),
+	createdAt: timestamp("created_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+});
+
+export type KlipBrandTemplateLayer = typeof klipBrandTemplateLayers.$inferSelect;
+
 export const verifications = mysqlTable("verifications", {
 	id: varchar("id", { length: 64 }).primaryKey(),
 	identifier: text("identifier").notNull(),
