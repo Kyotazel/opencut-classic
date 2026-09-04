@@ -7,6 +7,7 @@ import {
 	Folder03Icon,
 	Happy01Icon,
 	HeadphonesIcon,
+	Layers01Icon,
 	MagicWand05Icon,
 	TextIcon,
 	Settings01Icon,
@@ -24,6 +25,7 @@ export const TAB_KEYS = [
 	"transitions",
 	"captions",
 	"adjustment",
+	"brand",
 	"settings",
 ] as const;
 
@@ -67,6 +69,10 @@ export const tabs = {
 	adjustment: {
 		icon: createHugeiconsIcon({ icon: SlidersHorizontalIcon }),
 		label: "Adjustment",
+	},
+	brand: {
+		icon: createHugeiconsIcon({ icon: Layers01Icon }),
+		label: "Brand",
 	},
 	settings: {
 		icon: createHugeiconsIcon({ icon: Settings01Icon }),
