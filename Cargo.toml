@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "apps/desktop",
     "rust/crates/time",
+    "rust/crates/klip",
     "rust/crates/bridge",
     "rust/crates/effects",
     "rust/crates/gpu",

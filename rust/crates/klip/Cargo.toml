@@ -1,0 +1,14 @@
+[package]
+name = "klip"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/klip.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+approx = "0.5"
