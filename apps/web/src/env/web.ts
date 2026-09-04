@@ -28,6 +28,11 @@ const webEnvSchema = z.object({
 	IG_APP_SECRET: z.string().optional(),
 	IG_REDIRECT_URI: z.string().optional(),
 	IG_TOKEN_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/).optional(),
+
+	// Shared login (opsional; wajib diisi di server sebelum login dipakai)
+	APP_USER: z.string().optional(),
+	APP_PASSWORD: z.string().optional(),
+	APP_SESSION_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/).optional(),
 });
 
 export type WebEnv = z.infer<typeof webEnvSchema>;
