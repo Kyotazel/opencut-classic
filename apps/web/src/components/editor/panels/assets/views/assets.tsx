@@ -113,6 +113,68 @@ export function MediaView() {
 	const [isProcessing, setIsProcessing] = useState(false);
 	const [progress, setProgress] = useState(0);
 
+	const processZipBatch = async ({ file }: { file: File }): Promise<string[]> => {
+		const form = new FormData();
+		form.append("file", file);
+		const res = await fetch("/api/uploads/batch", { method: "POST", body: form });
+		if (!res.ok) {
+			let detail: string | undefined;
+			try {
+				const body = (await res.json()) as { error?: string };
+				detail = body.error;
+			} catch {
+				// Non-JSON error body — fall back to the generic message below.
+			}
+			throw new Error(detail ?? `Upload gagal: ${file.name}`);
+		}
+		const body = (await res.json()) as {
+			batchId: string;
+			succeeded: number;
+			items: Array<{
+				name: string;
+				status: string;
+				url: string | null;
+				width: number | null;
+				height: number | null;
+				duration: number | null;
+			}>;
+		};
+		const names: string[] = [];
+		const skipped = body.items.filter((i) => i.status !== "ok").length;
+		for (const item of body.items) {
+			if (item.status !== "ok" || !item.url) continue;
+			// Ambil kembali bytes dari server agar pipeline lokal (thumbnail,
+			// rilisan media bin) sama persis dengan upload satuan. Tradeoff:
+			// transfer ganda, dioptimasi nanti bila jadi masalah.
+			const blobRes = await fetch(item.url);
+			if (!blobRes.ok) continue;
+			const blob = await blobRes.blob();
+			const ext = item.name.slice(item.name.lastIndexOf(".")).toLowerCase();
+			const backFile = new File([blob], item.name, {
+				type: blob.type || (ext === ".mov" ? "video/quicktime" : `video/${ext.slice(1)}`),
+			});
+			const processed = await processMediaAssets({
+				files: [backFile],
+				serverMeta: {
+					url: item.url,
+					width: item.width,
+					height: item.height,
+					duration: item.duration,
+					thumbnailUrl: null,
+				},
+			});
+			for (const asset of processed) {
+				const saved = await editor.media.addMediaAsset({
+					projectId: activeProject!.metadata.id,
+					asset,
+				});
+				if (saved) names.push(saved.name);
+			}
+		}
+		if (skipped > 0) toast.warning(`${skipped} file di-skip dari ${file.name}`);
+		return names;
+	};
+
 	const processFiles = async ({ files }: { files: File[] }) => {
 		if (!files || files.length === 0) return;
 		if (!activeProject) {
@@ -128,6 +190,12 @@ export function MediaView() {
 				promise: async () => {
 					const uploadedNames: string[] = [];
 					for (const [i, file] of files.entries()) {
+						if (file.name.toLowerCase().endsWith(".zip")) {
+							const names = await processZipBatch({ file });
+							uploadedNames.push(...names);
+							setProgress(((i + 1) / files.length) * 100);
+							continue;
+						}
 						// Server-first: persist the file via POST /api/uploads before
 						// the asset ever reaches the media bin. On failure the file
 						// is skipped entirely — no local-only asset is added, since
@@ -163,7 +231,7 @@ export function MediaView() {
 
 	const { isDragOver, dragProps, openFilePicker, fileInputProps } =
 		useFileUpload({
-			accept: "image/*,video/*,audio/*",
+			accept: "image/*,video/*,audio/*,.zip",
 			multiple: true,
 			onFilesSelected: (files) => processFiles({ files }),
 		});
