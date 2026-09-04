@@ -12,6 +12,7 @@ import { useEditor } from "@/editor/use-editor";
 import {
 	type KlipBrandKind,
 	type KlipBrandLayer,
+	fileExtension,
 	klipLayerToElement,
 	VOLUME_DB_MAX,
 	VOLUME_DB_MIN,
@@ -207,20 +208,29 @@ export function BrandPanel() {
 			const self = sorted[idx];
 			if (!other || !self) return;
 			try {
-				// Persist swapped z values. Element order within the track
-				// array is the timeline z-order: with both elements on the
-				// same track, swap their positions via delete + re-insert is
-				// heavy and history-noisy, so z is the source of truth here
-				// and takes effect on next insert; the list re-sorts by z.
 				await patchLayer({ id: self.id, patch: { z: other.z } });
 				await patchLayer({ id: other.id, patch: { z: self.z } });
+				// Mirror the swap in the timeline so the visual stacking
+				// updates immediately (undoable via ReorderElementsCommand).
+				if (
+					self.elementId &&
+					other.elementId &&
+					self.trackId &&
+					self.trackId === other.trackId
+				) {
+					editor.timeline.reorderElements({
+						trackId: self.trackId,
+						firstElementId: self.elementId,
+						secondElementId: other.elementId,
+					});
+				}
 				void refresh();
 			} catch (error) {
 				console.error("Brand panel: z-order swap failed", error);
 				toast.error("Reorder failed");
 			}
 		},
-		[klipProjectId, layers, patchLayer, refresh],
+		[editor, klipProjectId, layers, patchLayer, refresh],
 	);
 
 	const handleDelete = useCallback(
@@ -275,7 +285,9 @@ export function BrandPanel() {
 						headers: { "content-type": "application/json" },
 						body: JSON.stringify({
 							kind: asset.kind,
-							file: `brand/${asset.mediaId}`,
+							file: asset.url.startsWith("/api/media/")
+								? `brand/${asset.mediaId}${fileExtension({ filename: file.name })}`
+								: `brand/${asset.mediaId}`,
 							assetId: asset.mediaId,
 							name: file.name.replace(/\.[^.]+$/, "").slice(0, 255) || "Brand layer",
 						}),
@@ -305,25 +317,27 @@ export function BrandPanel() {
 					canvasHeight,
 					totalDuration,
 				});
+				// Snapshot existing element ids so the newly inserted one is
+				// identified by diff — deterministic for a single insert,
+				// unlike matching by name/mediaId (breaks on duplicates).
+				const sceneBefore = editor.scenes.getActiveScene();
+				const idsBefore = new Set<string>();
+				for (const track of [
+					...sceneBefore.tracks.overlay,
+					sceneBefore.tracks.main,
+					...sceneBefore.tracks.audio,
+				]) {
+					for (const e of track.elements) idsBefore.add(e.id);
+				}
 				editor.timeline.insertElement({
 					placement: { mode: "auto" },
 					element,
 				});
-				// The command generates the element id internally; find the
-				// newly inserted element by matching mediaId + name.
 				const scene = editor.scenes.getActiveScene();
 				const allTracks = [...scene.tracks.overlay, scene.tracks.main, ...scene.tracks.audio];
 				let found: { trackId: string; elementId: string } | null = null;
 				for (const track of allTracks) {
-					const match = [...track.elements]
-						.reverse()
-						.find(
-							(e) =>
-								"name" in e &&
-								(e as { name?: string }).name === draft.name &&
-								"mediaId" in e &&
-								(e as { mediaId?: string }).mediaId === (draft.asset_id ?? draft.file),
-						);
+					const match = track.elements.find((e) => !idsBefore.has(e.id));
 					if (match) {
 						found = { trackId: track.id, elementId: match.id };
 						break;

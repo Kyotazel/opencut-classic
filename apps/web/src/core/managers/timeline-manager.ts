@@ -37,6 +37,7 @@ import {
 	InsertElementCommand,
 	DeleteElementsCommand,
 	DuplicateElementsCommand,
+	ReorderElementsCommand,
 	UpdateElementsCommand,
 	SplitElementsCommand,
 	MoveElementCommand,
@@ -255,6 +256,23 @@ export class TimelineManager {
 		elements: { trackId: string; elementId: string }[];
 	}): void {
 		const command = new DeleteElementsCommand({ elements });
+		this.editor.command.execute({ command });
+	}
+
+	reorderElements({
+		trackId,
+		firstElementId,
+		secondElementId,
+	}: {
+		trackId: string;
+		firstElementId: string;
+		secondElementId: string;
+	}): void {
+		const command = new ReorderElementsCommand({
+			trackId,
+			firstElementId,
+			secondElementId,
+		});
 		this.editor.command.execute({ command });
 	}
 

@@ -101,6 +101,13 @@ function clampRotate(deg: number): number {
 	return Math.min(Math.max(deg, -360), 360);
 }
 
+/** Client-safe file extension (lowercased, with dot) — mirrors server ext sets. */
+export function fileExtension({ filename }: { filename: string }): string {
+	const idx = filename.lastIndexOf(".");
+	if (idx === -1) return "";
+	return filename.slice(idx).toLowerCase();
+}
+
 const trackForKind = (kind: KlipBrandKind): BrandTrack =>
 	kind === "image" ? "graphic" : kind === "video" ? "video" : "audio";
 
