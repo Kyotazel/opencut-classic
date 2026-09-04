@@ -74,6 +74,72 @@ describe("ig-api publishReel", () => {
 		).rejects.toThrow("Video tidak valid");
 	});
 
+	test("resumable ditolak -> fallback video_url", async () => {
+		const seen: string[] = [];
+		__setFetchMock(async (url: string | URL | Request, init?: RequestInit) => {
+			const u = String(url);
+			const method = init?.method ?? "GET";
+			if (u.startsWith(`${BASE}/123/media_publish`)) {
+				return jsonResponse({ body: { id: "media-9" } })
+			}
+			if (u.startsWith(`${BASE}/123/media`)) {
+				const parsed = new URL(u);
+				if (parsed.searchParams.has("video_url")) {
+					seen.push("via-url");
+					expect(parsed.searchParams.get("media_type")).toBe("REELS");
+					return jsonResponse({ body: { id: "container-9" } })
+				}
+				return jsonResponse({
+					body: { error: { message: "The parameter video_url is required", code: 100 } },
+					status: 400,
+				})
+			}
+			if (u.startsWith(`${BASE}/container-9`)) {
+				return jsonResponse({ body: { status_code: "FINISHED" } })
+			}
+			if (u.startsWith(`${BASE}/media-9`)) {
+				return jsonResponse({ body: { permalink: "https://ig.example/p/9" } })
+			}
+			expect(method).toBe("UNREACHABLE");
+			return jsonResponse({ body: {} })
+		});
+		const stages: string[] = [];
+		const result = await publishReel({
+			igUserId: "123",
+			accessToken: "tok",
+			caption: "halo",
+			videoBytes: new Uint8Array([1]).buffer,
+			videoUrl: "https://cdn.example/v.mp4",
+			pollIntervalMs: 1,
+			onStage: (s) => stages.push(s),
+		});
+		expect(result).toEqual({ containerId: "container-9", permalink: "https://ig.example/p/9" });
+		expect(seen).toEqual(["via-url"]);
+		expect(stages).toEqual(["upload", "processing", "published"]);
+	});
+
+	test("resumable ditolak tanpa videoUrl -> error panduan", async () => {
+		__setFetchMock(async (url: string | URL | Request) => {
+			const u = String(url);
+			if (u.startsWith(`${BASE}/123/media`)) {
+				return jsonResponse({
+					body: { error: { message: "The parameter video_url is required", code: 100 } },
+					status: 400,
+				})
+			}
+			return jsonResponse({ body: {} })
+		});
+		await expect(
+			publishReel({
+				igUserId: "123",
+				accessToken: "tok",
+				caption: "",
+				videoBytes: new Uint8Array([1]).buffer,
+				pollIntervalMs: 1,
+			}),
+		).rejects.toThrow("KLIP_PUBLIC_BASE_URL");
+	});
+
 	test("401 menandai token invalid", async () => {
 		__setFetchMock(async () =>
 			jsonResponse({ body: { error: { message: "invalid", code: 190 } }, status: 401 }),

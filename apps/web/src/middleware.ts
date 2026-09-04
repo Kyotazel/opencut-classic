@@ -21,6 +21,9 @@ export async function middleware(request: NextRequest) {
 	const { pathname } = request.nextUrl;
 	if (pathname === "/") return NextResponse.next();
 	if (pathname === "/api/auth/login") return NextResponse.next();
+	if (pathname.startsWith("/api/klip/publishes/") && pathname.endsWith("/video")) {
+		return NextResponse.next();
+	}
 	if (!process.env.APP_SESSION_KEY || !process.env.APP_USER || !process.env.APP_PASSWORD) {
 		if (pathname.startsWith("/api/")) {
 			return NextResponse.json({ error: "Auth belum dikonfigurasi di server" }, { status: 503 });

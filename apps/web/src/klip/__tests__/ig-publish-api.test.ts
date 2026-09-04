@@ -12,6 +12,7 @@ import {
 } from "@/db";
 import { generateUUID } from "@/utils/id";
 import { encryptToken } from "@/klip/ig-token";
+import type { publishReel } from "@/klip/ig-api";
 import {
 	__setPublishFn,
 	aggregatePublishStatus,
@@ -19,11 +20,13 @@ import {
 	parseAccountIds,
 	processItems,
 	publishVideoPath,
+	publishVideoUrl,
 	validateCaption,
 	validateVideoFile,
 } from "@/klip/ig-publish";
 import { POST as createPublish } from "@/app/api/klip/publishes/route";
 import { GET as getPublish } from "@/app/api/klip/publishes/[id]/route";
+import { GET as getVideo } from "@/app/api/klip/publishes/[id]/video/route";
 import { PATCH as patchCaption } from "@/app/api/klip/projects/[id]/caption/route";
 
 const createdProjectIds: string[] = [];
@@ -198,6 +201,67 @@ describe("publishes route", () => {
 		expect(item?.status).toBe("failed");
 		const [acc] = await db.select().from(klipIgAccounts).where(eq(klipIgAccounts.id, accountId)).limit(1);
 		expect(acc?.status).toBe("token_expired");
+		await rm(abs, { force: true });
+	});
+});
+
+describe("publishes video_url fallback", () => {
+	test("publishVideoUrl null tanpa env, URL penuh bila dipasang", () => {
+		const prev = process.env.KLIP_PUBLIC_BASE_URL;
+		delete process.env.KLIP_PUBLIC_BASE_URL;
+		expect(publishVideoUrl({ publishId: "p_abc" })).toBeNull();
+		process.env.KLIP_PUBLIC_BASE_URL = "https://cdn.example/";
+		expect(publishVideoUrl({ publishId: "p_abc" })).toBe(
+			"https://cdn.example/api/klip/publishes/p_abc/video",
+		);
+		if (prev === undefined) delete process.env.KLIP_PUBLIC_BASE_URL;
+		else process.env.KLIP_PUBLIC_BASE_URL = prev;
+	});
+
+	test("processItems meneruskan videoUrl publik ke publishFn", async () => {
+		const prev = process.env.KLIP_PUBLIC_BASE_URL;
+		process.env.KLIP_PUBLIC_BASE_URL = "https://cdn.example";
+		try {
+			const projectId = await makeProject();
+			const accountId = await makeAccount();
+			const publishId = newPublishId({ prefix: "p" });
+			createdPublishIds.push(publishId);
+			const { abs, rel } = publishVideoPath({ publishId });
+			await mkdir(path.dirname(abs), { recursive: true });
+			await writeFile(abs, new Uint8Array([7]));
+			await db.insert(klipIgPublishes).values({ id: publishId, projectId, caption: "c", videoPath: rel });
+			const itemId = newPublishId({ prefix: "pi" });
+			await db.insert(klipIgPublishItems).values({ id: itemId, publishId, igAccountId: accountId });
+			let seenVideoUrl: string | undefined;
+			__setPublishFn({
+				fn: (opts: Parameters<typeof publishReel>[0]) => {
+					seenVideoUrl = opts.videoUrl;
+					return Promise.resolve({ containerId: "c1", permalink: "https://ig.example/p/1" });
+				},
+			});
+			await processItems({ publishId });
+			expect(seenVideoUrl).toBe(`https://cdn.example/api/klip/publishes/${publishId}/video`);
+			await rm(abs, { force: true });
+		} finally {
+			if (prev === undefined) delete process.env.KLIP_PUBLIC_BASE_URL;
+			else process.env.KLIP_PUBLIC_BASE_URL = prev;
+		}
+	});
+
+	test("GET video menyajikan mp4, 404 bila tak dikenal", async () => {
+		const projectId = await makeProject();
+		const publishId = newPublishId({ prefix: "p" });
+		createdPublishIds.push(publishId);
+		const { abs, rel } = publishVideoPath({ publishId });
+		await mkdir(path.dirname(abs), { recursive: true });
+		await writeFile(abs, new Uint8Array([1, 2, 3, 4]));
+		await db.insert(klipIgPublishes).values({ id: publishId, projectId, caption: "", videoPath: rel });
+		const ok = await getVideo(req({ url: "http://t/x" }), { params: Promise.resolve({ id: publishId }) });
+		expect(ok.status).toBe(200);
+		expect(ok.headers.get("content-type")).toBe("video/mp4");
+		expect((await ok.arrayBuffer()).byteLength).toBe(4);
+		const missing = await getVideo(req({ url: "http://t/x" }), { params: Promise.resolve({ id: "p_tidak_ada" }) });
+		expect(missing.status).toBe(404);
 		await rm(abs, { force: true });
 	});
 });

@@ -99,6 +99,12 @@ export function publishVideoPath({ publishId }: { publishId: string }): {
 	return { abs: path.join(dataRoot(), rel), rel };
 }
 
+export function publishVideoUrl({ publishId }: { publishId: string }): string | null {
+	const base = (process.env.KLIP_PUBLIC_BASE_URL ?? "").replace(/\/+$/, "");
+	if (!base) return null;
+	return `${base}/api/klip/publishes/${publishId}/video`;
+}
+
 export function aggregatePublishStatus({
 	items,
 }: {
@@ -177,6 +183,7 @@ export async function processItems({
 				accessToken: token,
 				caption: publish.caption ?? "",
 				videoBytes,
+				videoUrl: publishVideoUrl({ publishId }) ?? undefined,
 				onStage: (stage) => {
 					void db
 						.update(klipIgPublishItems)

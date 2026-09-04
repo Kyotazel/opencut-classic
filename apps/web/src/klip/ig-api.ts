@@ -143,6 +143,8 @@ export interface PublishReelOpts {
 	accessToken: string;
 	caption: string;
 	videoBytes: ArrayBuffer;
+	/** URL publik file mp4; dipakai hanya bila Meta menolak resumable upload. */
+	videoUrl?: string;
 	pollIntervalMs?: number;
 	onStage?: (stage: ReelStage) => void;
 }
@@ -247,6 +249,33 @@ async function uploadBytes({
 	}
 }
 
+function isVideoUrlRequired({ message }: { message: string }): boolean {
+	return message.toLowerCase().includes("video_url");
+}
+
+async function createReelContainerViaUrl({
+	igUserId,
+	token,
+	caption,
+	videoUrl,
+}: {
+	igUserId: string;
+	token: string;
+	caption: string;
+	videoUrl: string;
+}): Promise<string> {
+	const params: Record<string, string> = {
+		media_type: "REELS",
+		video_url: videoUrl,
+		share_to_feed: "true",
+	};
+	if (caption) params["caption"] = caption;
+	const rec = await igRequest({ method: "POST", path: `/${igUserId}/media`, token, params });
+	const id = strField({ rec, name: "id" });
+	if (!id) throw new Error("Instagram tidak mengembalikan container id");
+	return id;
+}
+
 async function pollContainer({
 	containerId,
 	token,
@@ -309,12 +338,35 @@ export async function publishReel(opts: PublishReelOpts): Promise<{
 }> {
 	const pollIntervalMs = opts.pollIntervalMs ?? 5000;
 	opts.onStage?.("upload");
-	const { containerId, uploadUri } = await createReelUploadSession({
-		igUserId: opts.igUserId,
-		token: opts.accessToken,
-		caption: opts.caption,
-	});
-	await uploadBytes({ uploadUri, token: opts.accessToken, videoBytes: opts.videoBytes });
+	let containerId: string;
+	try {
+		const session = await createReelUploadSession({
+			igUserId: opts.igUserId,
+			token: opts.accessToken,
+			caption: opts.caption,
+		});
+		await uploadBytes({
+			uploadUri: session.uploadUri,
+			token: opts.accessToken,
+			videoBytes: opts.videoBytes,
+		});
+		containerId = session.containerId;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "Publish gagal";
+		const videoUrl = opts.videoUrl;
+		if (!isVideoUrlRequired({ message })) throw error;
+		if (!videoUrl) {
+			throw new Error(
+				"Instagram menolak resumable upload (video_url required). Pasang KLIP_PUBLIC_BASE_URL di env server lalu retry publish.",
+			);
+		}
+		containerId = await createReelContainerViaUrl({
+			igUserId: opts.igUserId,
+			token: opts.accessToken,
+			caption: opts.caption,
+			videoUrl,
+		});
+	}
 	opts.onStage?.("processing");
 	await pollContainer({ containerId, token: opts.accessToken, pollIntervalMs });
 	const permalink = await publishContainer({
