@@ -449,7 +449,7 @@ export function BrandPanel() {
 			const res = await fetch(`/api/klip/projects/${klipProjectId}/apply-template`, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ templateId: selectedTemplateId }),
+				body: JSON.stringify({ templateId: selectedTemplateId, mainDuration: totalDuration }),
 			});
 			if (!res.ok) {
 				const body = (await res.json().catch(() => null)) as { error?: string } | null;
