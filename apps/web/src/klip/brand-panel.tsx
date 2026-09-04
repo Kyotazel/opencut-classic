@@ -9,6 +9,7 @@ import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { useEditor } from "@/editor/use-editor";
+import { processMediaAssets } from "@/media/processing";
 import {
 	type KlipBrandKind,
 	type KlipBrandLayer,
@@ -311,12 +312,45 @@ export function BrandPanel() {
 		async ({ id }: { id: string }) => {
 			const draft = layers.find((l) => l.id === id);
 			if (!draft) return;
+			if (!project) {
+				toast.error("No active project");
+				return;
+			}
 			try {
-				const { element } = klipLayerToElement(draft, {
-					canvasWidth,
-					canvasHeight,
-					totalDuration,
+				// The renderer only knows media registered in the browser media
+				// bin (scene-builder skips elements whose mediaId is unknown).
+				// So fetch the brand file from the server and register it
+				// first; the returned browser id becomes the element mediaId.
+				const serverId = draft.asset_id ?? draft.file;
+				const fileRes = await fetch(`/api/media/${encodeURIComponent(serverId)}`);
+				if (!fileRes.ok) {
+					throw new Error(`Brand file not found on server: ${serverId}`);
+				}
+				const blob = await fileRes.blob();
+				const ext = fileExtension({ filename: draft.file });
+				const file = new File([blob], `${draft.name}${ext}`, {
+					type: blob.type || undefined,
 				});
+				const [processed] = await processMediaAssets({ files: [file] });
+				if (!processed) throw new Error("Failed to process brand file");
+				const saved = await editor.media.addMediaAsset({
+					projectId: project.metadata.id,
+					asset: processed,
+				});
+				if (!saved) throw new Error("Failed to register brand media");
+
+				const { element } = klipLayerToElement(
+					{ ...draft, asset_id: saved.id, file: saved.id },
+					{
+						canvasWidth,
+						canvasHeight,
+						totalDuration,
+						assetWidth: saved.width ?? undefined,
+						assetHeight: saved.height ?? undefined,
+					},
+				);
+				// Ensure the mapped element points at the registered media.
+				const mapped = { ...element, mediaId: saved.id };
 				// Snapshot existing element ids so the newly inserted one is
 				// identified by diff — deterministic for a single insert,
 				// unlike matching by name/mediaId (breaks on duplicates).
@@ -331,7 +365,7 @@ export function BrandPanel() {
 				}
 				editor.timeline.insertElement({
 					placement: { mode: "auto" },
-					element,
+					element: mapped,
 				});
 				const scene = editor.scenes.getActiveScene();
 				const allTracks = [...scene.tracks.overlay, scene.tracks.main, ...scene.tracks.audio];
