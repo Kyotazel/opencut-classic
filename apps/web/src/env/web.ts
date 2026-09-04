@@ -22,6 +22,12 @@ const webEnvSchema = z.object({
 	MARBLE_WORKSPACE_KEY: z.string(),
 	FREESOUND_CLIENT_ID: z.string(),
 	FREESOUND_API_KEY: z.string(),
+
+	// Instagram publish (opsional; wajib diisi di server sebelum fitur dipakai)
+	IG_APP_ID: z.string().optional(),
+	IG_APP_SECRET: z.string().optional(),
+	IG_REDIRECT_URI: z.string().optional(),
+	IG_TOKEN_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/).optional(),
 });
 
 export type WebEnv = z.infer<typeof webEnvSchema>;
