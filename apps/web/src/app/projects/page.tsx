@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { KeyboardEvent, MouseEvent } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { EditorCore } from "@/core";
 import { MigrationDialog } from "@/project/components/migration-dialog";
@@ -22,6 +22,7 @@ import type {
 	TProjectSortOption,
 } from "@/project/types";
 import { formatTimecode, mediaTimeToSeconds } from "opencut-wasm";
+import { createProjectFromServerVideo } from "@/klip/batch-projects";
 import { formatDate } from "@/utils/date";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -184,6 +185,7 @@ function ProjectsHeader() {
 
 				<div className="flex items-center gap-3 md:gap-4">
 					<SearchBar className="hidden md:block" />
+					<UploadZipButton />
 					<NewProjectButton />
 				</div>
 			</div>
@@ -501,6 +503,94 @@ function SortDropdown({ children }: { children: React.ReactNode }) {
 				</DropdownMenuCheckboxItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
+	);
+}
+
+function UploadZipButton() {
+	const editor = useEditor();
+	const [busy, setBusy] = useState(false);
+	const [label, setLabel] = useState("Upload zip");
+	const fileRef = useRef<HTMLInputElement>(null);
+
+	const handleFile = async ({ files }: { files: FileList | null }) => {
+		if (!files || files.length === 0) return;
+		const zip = files[0]!;
+		if (fileRef.current) fileRef.current.value = "";
+		setBusy(true);
+		try {
+			setLabel(`Mengupload ${zip.name}...`);
+			const form = new FormData();
+			form.append("file", zip);
+			const res = await fetch("/api/uploads/batch", { method: "POST", body: form });
+			if (!res.ok) {
+				const body = (await res.json().catch(() => null)) as { error?: string } | null;
+				throw new Error(body?.error ?? `Upload gagal: ${zip.name}`);
+			}
+			const body = (await res.json()) as {
+				succeeded: number;
+				items: Array<{
+					name: string;
+					status: string;
+					url: string | null;
+					width: number | null;
+					height: number | null;
+					duration: number | null;
+				}>;
+			};
+			const videos = body.items.filter((i) => i.status === "ok" && i.url);
+			let created = 0;
+			for (const [i, item] of videos.entries()) {
+				setLabel(`Membuat project ${i + 1}/${videos.length}...`);
+				try {
+					await createProjectFromServerVideo({
+						item: { ...item, url: item.url! },
+						fetchFile: async (url) => {
+							const r = await fetch(url);
+							if (!r.ok) throw new Error(`Fetch gagal: ${item.name}`);
+							const blob = await r.blob();
+							const ext = item.name.slice(item.name.lastIndexOf(".")).toLowerCase();
+							return new File([blob], item.name, {
+								type: blob.type || (ext === ".mov" ? "video/quicktime" : `video/${ext.slice(1)}`),
+							});
+						},
+					});
+					created += 1;
+				} catch (error) {
+					console.error("Batch: create project failed", item.name, error);
+				}
+			}
+			await editor.project.loadAllProjects();
+			if (created === 0) throw new Error("Tidak ada project yang berhasil dibuat");
+			toast.success(`${created} project dibuat dari ${zip.name}`);
+		} catch (error) {
+			console.error("Batch: upload zip failed", error);
+			toast.error(error instanceof Error ? error.message : "Upload zip gagal");
+		} finally {
+			setBusy(false);
+			setLabel("Upload zip");
+		}
+	};
+
+	return (
+		<>
+			<input
+				ref={fileRef}
+				type="file"
+				accept=".zip"
+				className="hidden"
+				onChange={(e) => void handleFile({ files: e.target.files })}
+			/>
+			<Button
+				size="lg"
+				variant="secondary"
+				className="flex px-5 md:px-6"
+				disabled={busy}
+				onClick={() => fileRef.current?.click()}
+			>
+				<span className="text-sm font-medium hidden md:block">{label}</span>
+				<span className="text-sm font-medium block md:hidden">Zip</span>
+			</Button>
+		</>
 	);
 }
 
