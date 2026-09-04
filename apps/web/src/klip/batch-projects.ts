@@ -75,6 +75,9 @@ export async function createProjectFromServerVideo({
 			id: projectId,
 			name: baseName({ filename: processed.name }),
 			duration: getProjectDurationFromScenes({ scenes: [scene] }),
+			// Thumbnail langsung dari frame video agar kartu project tidak
+			// blank sebelum dibuka (editor normal mengisi ini saat dibuka).
+			thumbnail: processed.thumbnailUrl ?? undefined,
 			createdAt: new Date(),
 			updatedAt: new Date(),
 		},
