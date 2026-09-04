@@ -4,7 +4,18 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
-import { db, klipBrandTemplateLayers, klipBrandTemplates } from "@/db";
+import {
+	db,
+	klipBrandLayers,
+	klipBrandTemplateLayers,
+	klipBrandTemplates,
+	klipProjects,
+} from "@/db";
+import { POST as createLayer } from "@/app/api/klip/projects/[id]/brand/route";
+import { GET as byOpencut } from "@/app/api/klip/projects/by-opencut/route";
+import { POST as applyTemplate } from "@/app/api/klip/projects/[id]/apply-template/route";
+import { POST as saveAsTemplate } from "@/app/api/klip/projects/[id]/save-as-template/route";
+import { newBrandId } from "@/klip/brand";
 import {
 	GET as listTemplates,
 	POST as createTemplate,
@@ -15,6 +26,7 @@ import {
 } from "@/app/api/klip/brand-templates/[id]/route";
 
 const createdTemplateIds: string[] = [];
+const createdProjectIds: string[] = [];
 
 /** Route handlers take NextRequest; bun tests build plain Requests. */
 function req({ url, init }: { url: string; init?: RequestInit }): NextRequest {
@@ -26,6 +38,10 @@ function track({ id }: { id: string }) {
 }
 
 async function cleanup() {
+	for (const id of createdProjectIds.splice(0)) {
+		await db.delete(klipBrandLayers).where(eq(klipBrandLayers.projectId, id)).catch(() => {});
+		await db.delete(klipProjects).where(eq(klipProjects.id, id)).catch(() => {});
+	}
 	for (const id of createdTemplateIds.splice(0)) {
 		await db
 			.delete(klipBrandTemplateLayers)
@@ -117,5 +133,203 @@ describe("brand template CRUD", () => {
 			{ params: Promise.resolve({ id: template.id }) },
 		);
 		expect(got.status).toBe(404);
+	});
+});
+
+describe("brand template save-as and apply", () => {
+	test("save-as-template copies layers with anchor conversion", async () => {
+
+		// Project sumber: durasi 50 dtk, layer logo full + layer ads absolut 50.1-70.1.
+		const resolved = await byOpencut(
+			req({ url: "http://localhost/api/klip/projects/by-opencut?opencutRef=tpl-save-src" }),
+		);
+		const { project } = (await resolved.json()) as { project: { id: string } };
+		createdProjectIds.push(project.id);
+		await db
+			.update(klipProjects).set({ duration: 50 }).where(eq(klipProjects.id, project.id));
+
+		for (const payload of [
+			{ kind: "image", file: "brand/logo.png", name: "Logo", full: true },
+			{ kind: "video", file: "brand/ads.mp4", name: "Ads", full: false, start: 50.1, dur: 20 },
+		]) {
+			const res = await createLayer(
+				req({
+					url: `http://localhost/api/klip/projects/${project.id}/brand`,
+					init: {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify(payload),
+					},
+				}),
+				{ params: Promise.resolve({ id: project.id }) },
+			);
+			expect(res.status).toBe(201);
+		}
+		const saved = await saveAsTemplate(
+			req({
+				url: `http://localhost/api/klip/projects/${project.id}/save-as-template`,
+				init: {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ name: "Paket SaveAs" }),
+				},
+			}),
+			{ params: Promise.resolve({ id: project.id }) },
+		);
+		expect(saved.status).toBe(201);
+		const { template, layerCount } = (await saved.json()) as {
+			template: { id: string };
+			layerCount: number;
+		};
+		expect(layerCount).toBe(2);
+		track({ id: template.id });
+
+		const got = await getTemplate(
+			req({ url: `http://localhost/api/klip/brand-templates/${template.id}` }),
+			{ params: Promise.resolve({ id: template.id }) },
+		);
+		const { layers } = (await got.json()) as {
+			layers: Array<{ name: string; full: boolean; anchor: string; start: number }>;
+		};
+		const logo = layers.find((l) => l.name === "Logo")!;
+		const ads = layers.find((l) => l.name === "Ads")!;
+		expect(logo.full).toBe(true);
+		expect(logo.anchor).toBe("start");
+		expect(ads.anchor).toBe("main_end");
+		expect(ads.start).toBeCloseTo(0.1, 9);
+	});
+
+	test("apply-template resolves and replaces layers", async () => {
+		const tpl = await createTemplate(
+			req({
+				url: "http://localhost/api/klip/brand-templates",
+				init: {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ name: "Paket Apply" }),
+				},
+			}),
+		);
+		const { template } = (await tpl.json()) as { template: { id: string } };
+		track({ id: template.id });
+		await db.insert(klipBrandTemplateLayers).values([
+			{
+				id: newBrandId({ prefix: "tlyr" }),
+				templateId: template.id,
+				assetId: null,
+				filePath: "brand/logo.png",
+				name: "Logo",
+				kind: "image",
+				enabled: true,
+				anchor: "start",
+				x: 0.06,
+				y: 0.05,
+				scale: 0.36,
+				rotate: 0,
+				opacity: 100,
+				full: true,
+				start: 0,
+				dur: 0,
+				volume: 0.35,
+				duck: false,
+				z: 0,
+			},
+			{
+				id: newBrandId({ prefix: "tlyr" }),
+				templateId: template.id,
+				assetId: null,
+				filePath: "brand/ads.mp4",
+				name: "Ads",
+				kind: "video",
+				enabled: true,
+				anchor: "main_end",
+				x: 0.5,
+				y: 0.5,
+				scale: 1,
+				rotate: 0,
+				opacity: 100,
+				full: false,
+				start: 0.1,
+				dur: 20,
+				volume: 0.35,
+				duck: false,
+				z: 1,
+			},
+		]);
+
+		const resolved = await byOpencut(
+			req({ url: "http://localhost/api/klip/projects/by-opencut?opencutRef=tpl-apply-dst" }),
+		);
+		const { project } = (await resolved.json()) as { project: { id: string } };
+		createdProjectIds.push(project.id);
+
+		const body = { templateId: template.id, mainDuration: 50 };
+		const first = await applyTemplate(
+			req({
+				url: `http://localhost/api/klip/projects/${project.id}/apply-template`,
+				init: {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(body),
+				},
+			}),
+			{ params: Promise.resolve({ id: project.id }) },
+		);
+		expect(first.status).toBe(200);
+		const out = (await first.json()) as {
+			layers: Array<{ name: string; start: number; dur: number }>;
+			totalDuration: number;
+		};
+		expect(out.layers).toHaveLength(2);
+		expect(out.layers.find((l) => l.name === "Ads")!.start).toBeCloseTo(50.1, 9);
+		expect(out.totalDuration).toBeCloseTo(70.1, 9);
+
+		const second = await applyTemplate(
+			req({
+				url: `http://localhost/api/klip/projects/${project.id}/apply-template`,
+				init: {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(body),
+				},
+			}),
+			{ params: Promise.resolve({ id: project.id }) },
+		);
+		const out2 = (await second.json()) as { layers: unknown[] };
+		expect(out2.layers).toHaveLength(2);
+	});
+
+	test("apply-template rejects unknown main duration", async () => {
+		const tpl = await createTemplate(
+			req({
+				url: "http://localhost/api/klip/brand-templates",
+				init: {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ name: "Paket NoDur" }),
+				},
+			}),
+		);
+		const { template } = (await tpl.json()) as { template: { id: string } };
+		track({ id: template.id });
+		const resolved = await byOpencut(
+			req({ url: "http://localhost/api/klip/projects/by-opencut?opencutRef=tpl-apply-nodur" }),
+		);
+		const { project } = (await resolved.json()) as { project: { id: string } };
+		createdProjectIds.push(project.id);
+		const res = await applyTemplate(
+			req({
+				url: `http://localhost/api/klip/projects/${project.id}/apply-template`,
+				init: {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ templateId: template.id }),
+				},
+			}),
+			{ params: Promise.resolve({ id: project.id }) },
+		);
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: string };
+		expect(body.error).toBe("main duration unknown");
 	});
 });
