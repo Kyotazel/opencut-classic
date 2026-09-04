@@ -166,7 +166,7 @@ export function BrandPanel() {
 			} catch {
 				return;
 			}
-			const tracks = [...scene.tracks.overlay, ...scene.tracks.main, ...scene.tracks.audio];
+			const tracks = [...scene.tracks.overlay, scene.tracks.main, ...scene.tracks.audio];
 			const mediaAssets = editor.media.getAssets();
 			for (const draft of layersRef.current) {
 				if (!draft.elementId || !draft.trackId) continue;
