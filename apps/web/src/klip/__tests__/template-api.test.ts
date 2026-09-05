@@ -136,6 +136,47 @@ describe("brand template CRUD", () => {
 	});
 });
 
+function testJson({ res }: { res: Response }): Promise<Record<string, unknown>> {
+	return res.json().then((value: unknown) => {
+		if (typeof value !== "object" || value === null || Array.isArray(value)) {
+			throw new Error("test: response bukan JSON object");
+		}
+		return Object.fromEntries(Object.entries(value));
+	});
+}
+
+function testChild({
+	rec,
+	name,
+}: {
+	rec: Record<string, unknown>;
+	name: string;
+}): Record<string, unknown> {
+	const v = rec[name];
+	if (typeof v !== "object" || v === null || Array.isArray(v)) {
+		throw new Error(`test: ${name} bukan object`);
+	}
+	return Object.fromEntries(Object.entries(v));
+}
+
+function testStr({ rec, name }: { rec: Record<string, unknown>; name: string }): string {
+	const v = rec[name];
+	if (typeof v !== "string") throw new Error(`test: ${name} bukan string`);
+	return v;
+}
+
+function testNum({ rec, name }: { rec: Record<string, unknown>; name: string }): number {
+	const v = rec[name];
+	if (typeof v !== "number") throw new Error(`test: ${name} bukan number`);
+	return v;
+}
+
+function testArr({ rec, name }: { rec: Record<string, unknown>; name: string }): unknown[] {
+	const v = rec[name];
+	if (!Array.isArray(v)) throw new Error(`test: ${name} bukan array`);
+	return v;
+}
+
 describe("brand template save-as and apply", () => {
 	test("save-as-template copies layers with anchor conversion", async () => {
 
@@ -197,6 +238,105 @@ describe("brand template save-as and apply", () => {
 		expect(logo.anchor).toBe("start");
 		expect(ads.anchor).toBe("main_end");
 		expect(ads.start).toBeCloseTo(0.1, 9);
+	});
+
+	test("save-as meng-anchor ekor yang menjulur (kasus Belakang)", async () => {
+		// Project sumber: main 30.1 dtk, BGM 26.9-36.43 (ekor menjulur keluar main).
+		const resolved = await byOpencut(
+			req({ url: "http://localhost/api/klip/projects/by-opencut?opencutRef=tpl-save-tail" }),
+		);
+		const projectId = testStr({
+			rec: testChild({ rec: await testJson({ res: resolved }), name: "project" }),
+			name: "id",
+		});
+		createdProjectIds.push(projectId);
+		await db
+			.update(klipProjects).set({ duration: 30.1 }).where(eq(klipProjects.id, projectId));
+
+		for (const payload of [
+			{ kind: "image", file: "brand/wm.png", name: "WM", full: true },
+			{ kind: "audio", file: "brand/bgm.mp3", name: "BGM", full: false, start: 26.9, dur: 9.53 },
+		]) {
+			const res = await createLayer(
+				req({
+					url: `http://localhost/api/klip/projects/${projectId}/brand`,
+					init: {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify(payload),
+					},
+				}),
+				{ params: Promise.resolve({ id: projectId }) },
+			);
+			expect(res.status).toBe(201);
+		}
+		const saved = await saveAsTemplate(
+			req({
+				url: `http://localhost/api/klip/projects/${projectId}/save-as-template`,
+				init: {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ name: "Paket Ekor" }),
+				},
+			}),
+			{ params: Promise.resolve({ id: projectId }) },
+		);
+		expect(saved.status).toBe(201);
+		const templateId = testStr({
+			rec: testChild({ rec: await testJson({ res: saved }), name: "template" }),
+			name: "id",
+		});
+		track({ id: templateId });
+
+		const got = await getTemplate(
+			req({ url: `http://localhost/api/klip/brand-templates/${templateId}` }),
+			{ params: Promise.resolve({ id: templateId }) },
+		);
+		const layers = testArr({ rec: await testJson({ res: got }), name: "layers" });
+		const bgmRaw = layers.find((l) => {
+			if (typeof l !== "object" || l === null || Array.isArray(l)) return false;
+			return Object.fromEntries(Object.entries(l))["name"] === "BGM";
+		});
+		if (typeof bgmRaw !== "object" || bgmRaw === null || Array.isArray(bgmRaw)) {
+			throw new Error("test: layer BGM tidak ditemukan");
+		}
+		const bgm = Object.fromEntries(Object.entries(bgmRaw));
+		expect(bgm["anchor"]).toBe("main_end");
+		expect(testNum({ rec: bgm, name: "start" })).toBeCloseTo(-3.2, 9);
+
+		// Apply ke main 50 dtk: BGM nempel 3.2 dtk sebelum ujung main.
+		const dst = await byOpencut(
+			req({ url: "http://localhost/api/klip/projects/by-opencut?opencutRef=tpl-apply-tail" }),
+		);
+		const dstId = testStr({
+			rec: testChild({ rec: await testJson({ res: dst }), name: "project" }),
+			name: "id",
+		});
+		createdProjectIds.push(dstId);
+		const applied = await applyTemplate(
+			req({
+				url: `http://localhost/api/klip/projects/${dstId}/apply-template`,
+				init: {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ templateId, mainDuration: 50 }),
+				},
+			}),
+			{ params: Promise.resolve({ id: dstId }) },
+		);
+		expect(applied.status).toBe(200);
+		const out = await testJson({ res: applied });
+		const outLayers = testArr({ rec: out, name: "layers" });
+		const outBgmRaw = outLayers.find((l) => {
+			if (typeof l !== "object" || l === null || Array.isArray(l)) return false;
+			return Object.fromEntries(Object.entries(l))["name"] === "BGM";
+		});
+		if (typeof outBgmRaw !== "object" || outBgmRaw === null || Array.isArray(outBgmRaw)) {
+			throw new Error("test: layer BGM hasil apply tidak ditemukan");
+		}
+		const outBgm = Object.fromEntries(Object.entries(outBgmRaw));
+		expect(testNum({ rec: outBgm, name: "start" })).toBeCloseTo(46.8, 9);
+		expect(testNum({ rec: out, name: "totalDuration" })).toBeCloseTo(56.33, 9);
 	});
 
 	test("apply-template resolves and replaces layers", async () => {

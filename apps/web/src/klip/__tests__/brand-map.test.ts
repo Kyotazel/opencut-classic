@@ -227,3 +227,46 @@ describe("elementToKlipLayer", () => {
 		expect(patch.volume).toBeCloseTo(1, 9);
 	});
 });
+
+
+describe("round-trip posisi", () => {
+	test("layer → element → layer mengembalikan x/y/scale (kiri-atas)", () => {
+		const { element } = klipLayerToElement(
+			{
+				id: "lyr_rt",
+				asset_id: null,
+				file: "brand/wm.png",
+				name: "wm",
+				kind: "image",
+				enabled: true,
+				x: 0.18,
+				y: 0.85,
+				scale: 0.42,
+				rotate: 0,
+				start: 5,
+				dur: 9.53,
+				full: false,
+				volume: 0.35,
+				duck: false,
+				opacity: 100,
+				z: 0,
+			},
+			CTX,
+		);
+		if (element.type !== "image") throw new Error("test: expected image element");
+		const patch = elementToKlipLayer(
+			{
+				id: "el_rt",
+				...element,
+				trimEnd: ZERO_TICKS,
+				hidden: false,
+			},
+			CTX,
+		);
+		expect(patch.x).toBeCloseTo(0.18, 9);
+		expect(patch.y).toBeCloseTo(0.85, 9);
+		expect(patch.scale).toBeCloseTo(0.42, 9);
+		expect(patch.start).toBeCloseTo(5, 9);
+		expect(patch.dur).toBeCloseTo(9.53, 9);
+	});
+});

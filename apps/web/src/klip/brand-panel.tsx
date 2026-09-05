@@ -401,6 +401,9 @@ export function BrandPanel() {
 						height: number | null;
 						duration: number | null;
 					};
+					// Video/audio memakai durasi natural file (jendela di 0), bukan
+					// full-main; image (WM) tetap full seperti sebelumnya.
+					const timed = asset.kind !== "image";
 					const create = await fetch(`/api/klip/projects/${klipProjectId}/brand`, {
 						method: "POST",
 						headers: { "content-type": "application/json" },
@@ -411,6 +414,9 @@ export function BrandPanel() {
 								: `brand/${asset.mediaId}`,
 							assetId: asset.mediaId,
 							name: file.name.replace(/\.[^.]+$/, "").slice(0, 255) || "Brand layer",
+							full: !timed,
+							start: 0,
+							dur: timed && typeof asset.duration === "number" ? asset.duration : 0,
 						}),
 					});
 					if (!create.ok) throw new Error(`Create layer failed: ${create.status}`);

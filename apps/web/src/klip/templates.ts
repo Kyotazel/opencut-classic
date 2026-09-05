@@ -113,16 +113,23 @@ export async function resolveMainDuration({
 function toTemplateAnchor({
 	full,
 	start,
+	dur,
 	mainDuration,
 }: {
 	full: boolean;
 	start: number;
+	dur: number;
 	mainDuration: number | null;
 }): { anchor: TemplateAnchor; start: number } {
-	if (full || mainDuration == null || start < mainDuration) {
+	if (full || mainDuration == null) {
 		return { anchor: "start", start };
 	}
-	return { anchor: "main_end", start: start - mainDuration };
+	// Ekor yang menjulur melewati ujung main (mis. BGM 26.9-36.4 saat main
+	// 30.1) di-anchor ke main_end; offset boleh negatif (outro di dalam main).
+	if (start >= mainDuration || start + dur > mainDuration) {
+		return { anchor: "main_end", start: start - mainDuration };
+	}
+	return { anchor: "start", start };
 }
 
 export async function saveAsTemplate({
@@ -149,6 +156,7 @@ export async function saveAsTemplate({
 		const { anchor, start } = toTemplateAnchor({
 			full: l.full,
 			start: l.start,
+			dur: l.dur,
 			mainDuration,
 		});
 		await db.insert(klipBrandTemplateLayers).values({

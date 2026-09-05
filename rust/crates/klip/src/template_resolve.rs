@@ -66,6 +66,15 @@ mod tests {
     }
 
     #[test]
+    fn main_end_anchor_supports_negative_offset_for_tail_inside() {
+        // BGM 26.9-36.43 saat main 30.1 (kasus Belakang): offset -3.2.
+        let layer = TemplateLayerInput { anchor: TemplateAnchor::MainEnd, full: false, start: -3.2, dur: 9.53 };
+        let r = resolve_template_layer(&layer, 30.1);
+        assert!((r.start - 26.9).abs() < 1e-9);
+        assert_eq!(r.dur, 9.53);
+    }
+
+    #[test]
     fn total_duration_extends_for_appended_ads() {
         let layers = vec![
             ResolvedLayer { start: 0.0, dur: 50.0 },
