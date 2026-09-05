@@ -20,14 +20,17 @@ async function readLoginError({ res }: { res: Response }): Promise<string> {
 }
 
 export default function LoginPage() {
-	const [username, setUsername] = useState("");
-	const [password, setPassword] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	const handleSubmit = async (e: React.FormEvent) => {
+	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
 		if (busy) return;
+		// Baca dari FormData (bukan state): autofill browser tidak memicu
+		// onChange sehingga state bisa kosong padahal field terlihat terisi.
+		const form = new FormData(e.currentTarget);
+		const username = String(form.get("username") ?? "");
+		const password = String(form.get("password") ?? "");
 		setBusy(true);
 		setError(null);
 		try {
@@ -60,19 +63,17 @@ export default function LoginPage() {
 							<Label htmlFor="username">Username</Label>
 							<Input
 								id="username"
+								name="username"
 								autoComplete="username"
-								value={username}
-								onChange={(e) => setUsername(e.target.value)}
 							/>
 						</div>
 						<div className="space-y-1">
 							<Label htmlFor="password">Password</Label>
 							<Input
 								id="password"
+								name="password"
 								type="password"
 								autoComplete="current-password"
-								value={password}
-								onChange={(e) => setPassword(e.target.value)}
 							/>
 						</div>
 						{error && <p className="text-sm text-red-500">{error}</p>}
