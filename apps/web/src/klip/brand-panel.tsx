@@ -166,7 +166,7 @@ export function BrandPanel() {
 			} catch {
 				return;
 			}
-			const tracks = [...scene.tracks.overlay, scene.tracks.main, ...scene.tracks.audio];
+			const tracks = [scene.tracks.main, ...scene.tracks.overlay, ...scene.tracks.audio];
 			const mediaAssets = editor.media.getAssets();
 			for (const draft of layersRef.current) {
 				if (!draft.elementId || !draft.trackId) continue;
@@ -475,8 +475,8 @@ export function BrandPanel() {
 				const sceneBefore = editor.scenes.getActiveScene();
 				const idsBefore = new Set<string>();
 				for (const track of [
-					...sceneBefore.tracks.overlay,
 					sceneBefore.tracks.main,
+					...sceneBefore.tracks.overlay,
 					...sceneBefore.tracks.audio,
 				]) {
 					for (const e of track.elements) idsBefore.add(e.id);
@@ -486,7 +486,7 @@ export function BrandPanel() {
 					element: mapped,
 				});
 				const scene = editor.scenes.getActiveScene();
-				const allTracks = [...scene.tracks.overlay, scene.tracks.main, ...scene.tracks.audio];
+				const allTracks = [scene.tracks.main, ...scene.tracks.overlay, ...scene.tracks.audio];
 				let found: { trackId: string; elementId: string } | null = null;
 				for (const track of allTracks) {
 					const match = track.elements.find((e) => !idsBefore.has(e.id));
