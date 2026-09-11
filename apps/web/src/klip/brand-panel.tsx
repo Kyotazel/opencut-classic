@@ -273,7 +273,13 @@ export function BrandPanel() {
 			const next = { ...draft, ...patch };
 			const posX = (next.x - 0.5) * canvasWidth;
 			const posY = (0.5 - next.y) * canvasHeight;
-			const scale = Math.max(next.scale, 0.01);
+			// "Lebar penuh" mengabaikan scale manual: lebar tepat selebar kanvas,
+			// tinggi mengikuti rasio asli. Harus dihitung di sini juga, karena
+			// jalur ini yang menulis ulang params elemen setiap field berubah.
+			const scale =
+				next.fit === "full_width" && next.assetWidth != null && next.assetWidth > 0
+					? canvasWidth / next.assetWidth
+					: Math.max(next.scale, 0.01);
 			const elementPatch: Partial<TimelineElement> = {
 				hidden: !next.enabled,
 				params: {
@@ -818,7 +824,12 @@ function LayerInspector({
 				<Switch
 					checked={layer.fit === "full_width"}
 					onCheckedChange={(on) =>
-						onField({ fit: on ? "full_width" : "free" })
+						onField({
+							fit: on ? "full_width" : "free",
+							// Selebar kanvas hanya masuk akal bila terpusat; tanpa ini
+							// layer melebar penuh tapi tergeser ke kiri (x default 0.06).
+							...(on ? { x: 0.5 } : {}),
+						})
 					}
 				/>
 			</div>
