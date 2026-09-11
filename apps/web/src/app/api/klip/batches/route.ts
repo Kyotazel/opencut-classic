@@ -2,7 +2,8 @@ import path from "node:path";
 import { type NextRequest, NextResponse } from "next/server";
 import { MAX_ZIP_BYTES } from "@/klip/batch-upload";
 import { listZipEntries, saveBatchZip } from "@/klip/batch-store";
-import { createBatch, resolveDefaultOwnerUserId } from "@/klip/batch-service";
+import { createBatch, getBatch, listBatchJobs, resolveDefaultOwnerUserId } from "@/klip/batch-service";
+import { listBatches, summarizeJobs } from "@/klip/batch-query";
 import { dataRoot, UploadError } from "@/klip/upload";
 
 /**
@@ -59,6 +60,38 @@ async function rejectUnusableZip({
 			throw new UploadError(`${filename}: ${error.message}`, error.status);
 		}
 		throw error;
+	}
+}
+
+/**
+ * GET /api/klip/batches — daftar batch terbaru + progres untuk tracking.
+ *
+ * Tanpa `id`: ringkasan semua batch. Dengan `?id=b_xxx`: batch itu plus
+ * daftar job-nya, supaya bisa dilihat per video.
+ */
+export async function GET(request: NextRequest) {
+	// Dibaca dari URL, bukan request.nextUrl, supaya jalur ini juga bisa diuji
+	// dengan Request biasa (tanpa NextRequest penuh).
+	const id = new URL(request.url).searchParams.get("id");
+	try {
+		if (id) {
+			const batch = await getBatch({ id });
+			if (!batch) {
+				return NextResponse.json({ error: "Batch not found" }, { status: 404 });
+			}
+			const jobs = await listBatchJobs({ batchId: id });
+			return NextResponse.json({
+				batch: {
+					...batch,
+					progress: summarizeJobs({ statuses: jobs.map((j) => j.status) }),
+				},
+				jobs,
+			});
+		}
+		return NextResponse.json({ batches: await listBatches({}) });
+	} catch (error) {
+		console.error("GET /api/klip/batches failed", error);
+		return NextResponse.json({ error: "Batch list failed" }, { status: 500 });
 	}
 }
 

@@ -188,6 +188,11 @@ function ProjectsHeader() {
 					<SearchBar className="hidden md:block" />
 					<UploadZipButton />
 					<QueueBatchButton />
+					<Link href="/batches">
+						<Button variant="outline" size="sm">
+							<span className="text-sm font-medium hidden md:block">Antrian</span>
+						</Button>
+					</Link>
 					<Link href="/instagram">
 						<Button variant="outline" size="sm">
 							<span className="text-sm font-medium hidden md:block">Instagram</span>

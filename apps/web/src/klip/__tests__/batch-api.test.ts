@@ -6,8 +6,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq, inArray } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { db, klipBatchJobs, klipBatches, klipSettings } from "@/db";
-import { POST as createBatchRoute } from "@/app/api/klip/batches/route";
+import { GET as getBatchesRoute, POST as createBatchRoute } from "@/app/api/klip/batches/route";
 import { listZipEntries } from "@/klip/batch-store";
+import { summarizeJobs } from "@/klip/batch-query";
 import {
 	parseBoolSetting,
 	parseTimeSetting,
@@ -347,3 +348,72 @@ describe("POST /api/klip/batches (zip_url)", () => {
 		expect(empty.status).toBe(400);
 	});
 });
+
+describe("tracking antrian", () => {
+	test("summarizeJobs menghitung tiap status ke ember yang benar", () => {
+		expect(
+			summarizeJobs({
+				statuses: ["queued", "extracting", "rendering", "rendered", "published", "failed", "cancelled"],
+			}),
+		).toEqual({ queued: 1, running: 2, done: 2, failed: 2 });
+	});
+
+	test("summarizeJobs memperlakukan status tak dikenal sebagai queued", () => {
+		expect(summarizeJobs({ statuses: ["entah"] })).toEqual({
+			queued: 1,
+			running: 0,
+			done: 0,
+			failed: 0,
+		});
+	});
+
+	test("GET mengembalikan daftar batch + progres, terbaru dulu", async () => {
+		const buf = await Bun.file(zipPath).arrayBuffer();
+		const created = await createBatchRoute(
+			multipartReq({ file: new File([buf], "batch.zip", { type: "application/zip" }) }),
+		);
+		const body = (await created.json()) as { batchId: string };
+		createdBatchIds.push(body.batchId);
+
+		const res = await getBatchesRoute(req({ url: "http://localhost/api/klip/batches" }));
+		expect(res.status).toBe(200);
+		const list = (await res.json()) as {
+			batches: Array<{
+				id: string;
+				total: number;
+				progress: { queued: number; running: number; done: number; failed: number };
+			}>;
+		};
+		const found = list.batches.find((b) => b.id === body.batchId);
+		expect(found).toBeTruthy();
+		expect(found!.progress.queued).toBe(4);
+		expect(found!.progress.done).toBe(0);
+	});
+
+	test("GET dengan ?id mengembalikan job per video", async () => {
+		const id = createdBatchIds[createdBatchIds.length - 1]!;
+		const res = await getBatchesRoute(
+			req({ url: `http://localhost/api/klip/batches?id=${id}` }),
+		);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			batch: { id: string; progress: { queued: number } };
+			jobs: Array<{ entryName: string; status: string; maxAttempts: number }>;
+		};
+		expect(body.batch.id).toBe(id);
+		expect(body.jobs).toHaveLength(4);
+		expect(body.batch.progress.queued).toBe(4);
+		for (const j of body.jobs) {
+			expect(j.status).toBe("queued");
+			expect(j.maxAttempts).toBe(5);
+		}
+	});
+
+	test("GET ?id yang tidak ada membalas 404", async () => {
+		const res = await getBatchesRoute(
+			req({ url: "http://localhost/api/klip/batches?id=b_tidakada" }),
+		);
+		expect(res.status).toBe(404);
+	});
+});
+
