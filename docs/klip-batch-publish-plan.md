@@ -1,6 +1,6 @@
 # Klip x OpenCut - Batch ZIP -> Template -> Auto-Publish Instagram
 
-**Status:** Perencanaan - Tahap 1 siap dimulai (belum ada kode)  
+**Status:** Tahap 1 SELESAI (belum di-deploy) - commit `05a1c6fd`  
 **Repo:** Klip x OpenCut (fork), produksi `https://opencut.ordoagentic.ai`
 
 ---
@@ -305,35 +305,78 @@ Dua bug sebelumnya (anchor post-roll salah, angka 25.84 di video 30 detik) berak
 
 ---
 
-## 10. Langkah berikutnya
+## 10. Status Tahap 1 - SELESAI
 
-**Tahap 1 siap dikerjakan** (antrian + tabel + API masuk) - **bukan** langsung render.
-Tahap 1 kecil, bisa diuji, dan membuktikan seluruh kerangka jalan sebelum masuk ke bagian paling rapuh (Tahap 3).
+| # | Kriteria | Status |
+|---|---|---|
+| 1 | Tiga tabel di `schema.ts` + migrasi `0007_demonic_mysterio` | OK |
+| 2 | `POST /api/klip/batches` terima **multipart** dan **`zip_url`** | OK |
+| 3 | ZIP disimpan **ke disk** (`KLIP_DATA_ROOT/batches/`), bukan in-memory | OK |
+| 4 | Baris `klip_batches` (`queued`) + `klip_batch_jobs` per video | OK |
+| 5 | Respons `202` + `batch_id` | OK |
+| 6 | Test: multipart, `zip_url`, non-zip, traversal | OK (15 tes) |
 
-Dua penghambat sudah ditutup (bagian 9 nomor 1 dan 2), jadi skema database sudah bisa dibekukan:
+**File baru:** `src/klip/settings.ts`, `src/klip/batch-store.ts`, `src/klip/batch-service.ts`,
+`src/app/api/klip/batches/route.ts`, `src/klip/__tests__/batch-api.test.ts`,
+`migrations/0007_demonic_mysterio.sql`.
 
-- `klip_batches`
-- `klip_batch_jobs`
-- `klip_settings` (key-value)
+> Belum ada worker, render, atau publish - itu Tahap 2 dan seterusnya.
 
-### Definisi "Tahap 1 selesai"
+---
 
-1. Tiga tabel di atas ada di `schema.ts` + file migrasi berjalan bersih
-2. `POST /api/klip/batches` menerima **multipart** (UI) **dan** `zip_url` (API)
-3. ZIP disimpan **ke disk** (`KLIP_DATA_ROOT`), bukan in-memory
-4. Baris `klip_batches` (status `queued`) + baris `klip_batch_jobs` per video terbentuk
-5. Respons `202` + `batch_id`
-6. Ada test untuk: multipart, `zip_url`, tolak non-zip, tolak traversal
+## 11. JEBAKAN MIGRASI - baca sebelum deploy ke server!
 
-> Belum ada worker, belum ada render, belum ada publish. Itu Tahap 2 dan seterusnya.
+Saat mengerjakan Tahap 1 ditemukan bahwa **`drizzle_migrations` lokal berisi hash yang salah**.
+Baris 5-7 diisi manual waktu rekonsiliasi sebelumnya, tetapi hash-nya tidak cocok dengan nama file.
 
-### Utang mendesak di luar proyek ini
+**Kenapa berbahaya:** `drizzle-kit migrate` membandingkan hash **berdasarkan urutan**, bukan nama file.
+Karena hash baris 7 kebetulan sama dengan isi file **0006**, drizzle menganggap 0006 *dan* 0007 sudah
+diterapkan, lalu **mencatat 0007 sebagai sukses tanpa menjalankan satu pun DDL-nya**.
+Hasilnya: migrasi "berhasil" tetapi tabelnya tidak ada. Ini kelas kegagalan senyap yang sama dengan
+insiden `drizzle-kit` vs `bun` sebelumnya.
 
-**N3 - `pm2 save` belum dijalankan.** App produksi mati permanen kalau server reboot.
-Ini independen dari proyek batch dan sebaiknya dibereskan lebih dulu:
+**Wajib dicek di server (`third`) sebelum migrate:**
 
 ```bash
-pm2 save
-pm2 startup systemd -u root --hp /root
-systemctl is-enabled pm2-root
+cd /var/www/html/klip-opencut/apps/web
+
+# 1. Hash yang tercatat
+mysql -u klip -p klip -N -e "SELECT id,hash FROM drizzle_migrations ORDER BY id;"
+
+# 2. Hash file SEBENARNYA - urutan harus sepadan dengan di atas
+for f in migrations/0*.sql; do echo "$(sha256sum "$f" | cut -d" " -f1)  $f"; done
 ```
+
+Kalau tidak sepadan: **jangan andalkan `migrate`**. Jalankan DDL-nya langsung, karena marker
+`--> statement-breakpoint` bukan SQL valid (perhatikan: marker muncul di baris sendiri DAN
+menempel setelah `;`, jadi jangan pakai anchor `^`/`$`):
+
+```bash
+sed "s/--> statement-breakpoint//g" migrations/0007_demonic_mysterio.sql > /tmp/m7.sql
+mysql -u klip -p klip --force < /tmp/m7.sql
+
+# WAJIB: buktikan tabelnya benar-benar ada
+mysql -u klip -p klip -N -e "SHOW TABLES LIKE 'klip_batch%'; SHOW TABLES LIKE 'klip_settings';"
+```
+
+`--force` dipakai supaya error "table already exists" dari percobaan parsial tidak menghentikan
+perintah berikutnya. **Selalu verifikasi tabelnya ada** - jangan percaya kata "migrasi sukses".
+
+---
+
+## 12. Langkah berikutnya
+
+**Tahap 1 selesai.** Berikutnya **Tahap 2** (worker: extract + buat project + tempel template),
+tetap **belum render** - itu Tahap 3 dan paling rapuh.
+
+Yang perlu diputuskan saat Tahap 2 dimulai (bagian 9 nomor 3-5):
+
+- Lokasi kode worker: `apps/worker` atau `apps/web/scripts/`
+- Cara worker jalan: `pm2` atau `systemd`
+- Tampilan project batch di UI: semua user lihat, atau hanya owner
+
+### Utang di luar proyek ini
+
+- **N3** `pm2 save` - sudah dijalankan user. Aman terhadap reboot.
+- **N2** Redis belum jalan - masih menunda `/api/feedback` dan `/api/sounds/search`.
+- **N5** Rotasi `BETTER_AUTH_SECRET`, password MySQL, dan `APP_PASSWORD`.
