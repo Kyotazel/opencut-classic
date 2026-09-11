@@ -29,6 +29,78 @@ const CTX = {
 };
 
 describe("klipLayerToElement", () => {
+	test("fit full_width membuat lebar tepat selebar kanvas", () => {
+		const { element } = klipLayerToElement(
+			{
+				id: "lyr_fw",
+				asset_id: "m_ads",
+				file: "brand/ads.mp4",
+				name: "Ads",
+				kind: "video",
+				enabled: true,
+				x: 0.5,
+				y: 0.5,
+				// scale sengaja kecil; harus DIABAIKAN saat full_width.
+				scale: 0.1,
+				rotate: 0,
+				start: 0,
+				dur: 5,
+				full: false,
+				anchor: "start",
+				fit: "full_width",
+				volume: 0.35,
+				duck: false,
+				opacity: 100,
+				z: 0,
+			},
+			CTX,
+		);
+		if (element.type !== "video") {
+			throw new Error(`expected video element, got ${element.type}`);
+		}
+		// scaleX = canvasWidth / assetWidth = 1080 / 540 = 2
+		// lebar tampil = 540 * 2 = 1080 = lebar kanvas (penuh).
+		expect(num(element.params, "transform.scaleX")).toBeCloseTo(2, 9);
+		// Tinggi memakai skala sama: 200 * 2 = 400, tidak dipaksa 1920.
+		expect(num(element.params, "transform.scaleY")).toBeCloseTo(2, 9);
+		const shownWidth = (CTX.assetWidth ?? 0) * num(element.params, "transform.scaleX");
+		expect(shownWidth).toBeCloseTo(CTX.canvasWidth, 9);
+		const shownHeight = (CTX.assetHeight ?? 0) * num(element.params, "transform.scaleY");
+		expect(shownHeight).toBeCloseTo(400, 9);
+	});
+
+	test("fit free tetap memakai scale manual", () => {
+		const { element } = klipLayerToElement(
+			{
+				id: "lyr_fr",
+				asset_id: "m_ads",
+				file: "brand/ads.mp4",
+				name: "Ads",
+				kind: "video",
+				enabled: true,
+				x: 0.5,
+				y: 0.5,
+				scale: 0.36,
+				rotate: 0,
+				start: 0,
+				dur: 5,
+				full: false,
+				anchor: "start",
+				fit: "free",
+				volume: 0.35,
+				duck: false,
+				opacity: 100,
+				z: 0,
+			},
+			CTX,
+		);
+		if (element.type !== "video") {
+			throw new Error(`expected video element, got ${element.type}`);
+		}
+		// 0.36 * 1080 / 540 = 0.72 — hanya 36% lebar kanvas.
+		expect(num(element.params, "transform.scaleX")).toBeCloseTo(0.72, 9);
+	});
+
 	test("full image → graphic track element", () => {
 		const { track, element } = klipLayerToElement(
 			{
@@ -46,6 +118,7 @@ describe("klipLayerToElement", () => {
 				dur: 0,
 				full: true,
 				anchor: "start",
+				fit: "free",
 				volume: 0.35,
 				duck: false,
 				opacity: 100,
@@ -74,6 +147,7 @@ describe("klipLayerToElement", () => {
 				dur: 0,
 				full: true,
 				anchor: "start",
+				fit: "free",
 				volume: 0.35,
 				duck: false,
 				opacity: 100,
@@ -120,6 +194,7 @@ describe("klipLayerToElement", () => {
 				dur: 10,
 				full: false,
 				anchor: "start",
+				fit: "free",
 				volume: 0.35,
 				duck: true,
 				opacity: 100,
@@ -156,6 +231,7 @@ describe("klipLayerToElement", () => {
 				dur: 12,
 				full: false,
 				anchor: "start",
+				fit: "free",
 				volume: 0.35,
 				duck: false,
 				opacity: 80,
@@ -251,6 +327,7 @@ describe("round-trip posisi", () => {
 				dur: 9.53,
 				full: false,
 				anchor: "start",
+				fit: "free",
 				volume: 0.35,
 				duck: false,
 				opacity: 100,

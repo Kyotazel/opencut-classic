@@ -168,6 +168,7 @@ export async function saveAsTemplate({
 			kind: l.kind,
 			enabled: l.enabled,
 			anchor,
+			fit: l.fit,
 			x: l.x,
 			y: l.y,
 			scale: l.scale,
@@ -231,9 +232,10 @@ export async function applyTemplate({
 			rotate: layer.rotate,
 			opacity: layer.opacity,
 			full: layer.full,
-			// Simpan anchor template supaya niat "di akhir video" tidak hilang
-			// saat layer ini disimpan ulang jadi template lain.
+			// Simpan anchor/fit template supaya niat user tidak hilang saat
+			// layer ini disimpan ulang jadi template lain.
 			anchor: layer.anchor,
+			fit: layer.fit,
 			start: r.start,
 			dur: r.dur,
 			volume: layer.volume,

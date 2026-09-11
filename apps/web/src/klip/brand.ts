@@ -2,7 +2,7 @@ import path from "node:path";
 import { eq } from "drizzle-orm";
 import { db, klipBrandLayers, klipProjects } from "@/db";
 import { generateUUID } from "@/utils/id";
-import type { KlipBrandKind } from "./brand-map";
+import type { BrandFit, KlipBrandKind } from "./brand-map";
 import type { TemplateAnchor } from "./template-resolve";
 
 export const BRAND_DIR = "brand";
@@ -47,6 +47,7 @@ export function rowToLayer({ row }: { row: BrandLayerRow }) {
 		dur: row.dur,
 		full: row.full,
 		anchor: row.anchor as TemplateAnchor,
+		fit: row.fit as BrandFit,
 		volume: row.volume,
 		duck: row.duck,
 		opacity: row.opacity,

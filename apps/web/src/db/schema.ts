@@ -123,6 +123,9 @@ export const klipBrandLayers = mysqlTable("klip_brand_layers", {
 	full: boolean("full").default(true).notNull(),
 	// "main_end" = layer selalu mulai tepat saat video utama habis (post-roll).
 	anchor: mysqlEnum("anchor", ["start", "main_end"]).default("start").notNull(),
+	// "full_width" = lebar layer selalu memenuhi lebar kanvas; tinggi mengikuti
+	// rasio asli dan boleh melewati kanvas. "free" = skala manual.
+	fit: mysqlEnum("fit", ["free", "full_width"]).default("free").notNull(),
 	start: double("start").default(0).notNull(),
 	dur: double("dur").default(0).notNull(),
 	volume: double("volume").default(0.35).notNull(),
@@ -166,6 +169,8 @@ export const klipBrandTemplateLayers = mysqlTable("klip_brand_template_layers", 
 	rotate: double("rotate").default(0).notNull(),
 	opacity: int("opacity").default(100).notNull(),
 	full: boolean("full").default(true).notNull(),
+	// Ikut tersimpan agar niat "lebar penuh" bertahan di template.
+	fit: mysqlEnum("fit", ["free", "full_width"]).default("free").notNull(),
 	start: double("start").default(0).notNull(),
 	dur: double("dur").default(0).notNull(),
 	volume: double("volume").default(0.35).notNull(),

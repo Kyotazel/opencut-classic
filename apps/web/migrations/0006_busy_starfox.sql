@@ -1,0 +1,2 @@
+ALTER TABLE `klip_brand_layers` ADD `fit` enum('free','full_width') DEFAULT 'free' NOT NULL;--> statement-breakpoint
+ALTER TABLE `klip_brand_template_layers` ADD `fit` enum('free','full_width') DEFAULT 'free' NOT NULL;

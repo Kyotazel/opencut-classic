@@ -27,6 +27,28 @@ pub enum BrandTrack {
     Audio,
 }
 
+/// Anchor waktu layer template. Cermin TS: `apps/web/src/klip/template-resolve.ts`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BrandAnchor {
+    #[default]
+    Start,
+    MainEnd,
+}
+
+/// Cara layer menyesuaikan diri terhadap kanvas.
+/// Cermin TS: `BrandFit` di `apps/web/src/klip/brand-map.ts`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BrandFit {
+    /// Skala manual dari field `scale`.
+    #[default]
+    Free,
+    /// Lebar selalu memenuhi lebar kanvas; tinggi mengikuti rasio asli dan
+    /// boleh melewati kanvas (tidak di-clamp).
+    FullWidth,
+}
+
 /// A Klip brand layer. Field-for-field with the Klip model
 /// (`klip_brand_layers` table, Task 2) plus `z` ordering.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -40,6 +62,8 @@ pub struct KlipBrandLayer {
     pub rotate: f64,
     pub opacity: f64,
     pub full: bool,
+    pub anchor: BrandAnchor,
+    pub fit: BrandFit,
     pub start: f64,
     pub dur: f64,
     pub volume: f64,
@@ -59,6 +83,8 @@ impl Default for KlipBrandLayer {
             rotate: 0.0,
             opacity: 100.0,
             full: true,
+            anchor: BrandAnchor::Start,
+            fit: BrandFit::Free,
             start: 0.0,
             dur: 0.0,
             volume: 0.35,
@@ -107,6 +133,8 @@ pub struct MappedElement {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct KlipLayerPatch {
     pub full: bool,
+    pub anchor: BrandAnchor,
+    pub fit: BrandFit,
     pub start: f64,
     pub dur: f64,
     pub x: f64,
@@ -145,7 +173,10 @@ pub fn klip_layer_to_element(layer: &KlipBrandLayer, ctx: &BrandMapCtx) -> Mappe
     let pos_x = (layer.x - 0.5) * ctx.canvas_width;
     let pos_y = (0.5 - layer.y) * ctx.canvas_height;
 
+    // FullWidth: lebar tepat selebar kanvas, tinggi mengikuti rasio asli
+    // (boleh melewati kanvas). Free: skala manual dikali lebar kanvas.
     let base_scale = match ctx.asset_width {
+        Some(w) if w > 0.0 && layer.fit == BrandFit::FullWidth => ctx.canvas_width / w,
         Some(w) if w > 0.0 => layer.scale * ctx.canvas_width / w,
         _ => layer.scale,
     };
@@ -198,6 +229,10 @@ pub fn element_to_klip_layer_patch(el: &MappedElement, ctx: &BrandMapCtx) -> Kli
 
     KlipLayerPatch {
         full,
+        // Dari elemen saja niat user tidak terbaca; Start/Free adalah default
+        // netral. Panel brand mempertahankan pilihan dari layer tersimpan.
+        anchor: BrandAnchor::Start,
+        fit: BrandFit::Free,
         start,
         dur,
         x: if ctx.canvas_width > 0.0 {
@@ -330,6 +365,35 @@ mod tests {
         assert_relative_eq!(el.rotate_deg, 45.0);
     }
 
+
+    #[test]
+    fn full_width_ignores_scale_and_fills_canvas_width() {
+        let layer = KlipBrandLayer {
+            // scale sengaja kecil; harus diabaikan saat FullWidth.
+            scale: 0.1,
+            fit: BrandFit::FullWidth,
+            ..Default::default()
+        };
+        let el = klip_layer_to_element(&layer, &ctx());
+        // scaleX = canvas_width / asset_width = 1080 / 540 = 2
+        assert_relative_eq!(el.scale_x, 2.0);
+        // Tinggi memakai skala sama: 200 * 2 = 400, bukan dipaksa 1920.
+        assert_relative_eq!(el.scale_y, 2.0);
+        assert_relative_eq!(540.0 * el.scale_x, 1080.0);
+        assert_relative_eq!(200.0 * el.scale_y, 400.0);
+    }
+
+    #[test]
+    fn free_fit_still_uses_manual_scale() {
+        let layer = KlipBrandLayer {
+            scale: 0.36,
+            fit: BrandFit::Free,
+            ..Default::default()
+        };
+        let el = klip_layer_to_element(&layer, &ctx());
+        assert_relative_eq!(el.scale_x, 0.72);
+    }
+
     #[test]
     fn scale_falls_back_without_asset_width_and_clamps_minimum() {
         let c = BrandMapCtx {
@@ -382,6 +446,8 @@ mod tests {
             rotate: -30.0,
             opacity: 90.0,
             full: false,
+            anchor: BrandAnchor::Start,
+            fit: BrandFit::Free,
             start: 1.5,
             dur: 12.0,
             volume: 0.35,

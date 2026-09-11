@@ -54,6 +54,12 @@ const DEFAULT_VOLUME_GAIN = 0.35;
 
 export type KlipBrandKind = "image" | "video" | "audio";
 export type BrandTrack = "graphic" | "video" | "audio";
+/**
+ * "free" = skala manual dari field scale.
+ * "full_width" = lebar selalu memenuhi lebar kanvas; tinggi mengikuti rasio
+ * asli dan boleh melewati kanvas (tidak di-clamp).
+ */
+export type BrandFit = "free" | "full_width";
 
 export interface KlipBrandLayer {
 	id: string;
@@ -71,6 +77,7 @@ export interface KlipBrandLayer {
 	full: boolean;
 	/** "main_end" = mulai tepat saat video utama habis (post-roll). */
 	anchor: TemplateAnchor;
+	fit: BrandFit;
 	volume: number;
 	duck: boolean;
 	opacity: number;
@@ -129,10 +136,14 @@ export function klipLayerToElement(
 	const posX = (layer.x - 0.5) * ctx.canvasWidth;
 	const posY = (0.5 - layer.y) * ctx.canvasHeight;
 
+	// "full_width": lebar tepat selebar kanvas, tinggi mengikuti rasio asli
+	// (boleh melewati kanvas). "free": skala manual dikali lebar kanvas.
 	const baseScale =
-		ctx.assetWidth != null && ctx.assetWidth > 0
-			? (layer.scale * ctx.canvasWidth) / ctx.assetWidth
-			: layer.scale;
+		layer.fit === "full_width" && ctx.assetWidth != null && ctx.assetWidth > 0
+			? ctx.canvasWidth / ctx.assetWidth
+			: ctx.assetWidth != null && ctx.assetWidth > 0
+				? (layer.scale * ctx.canvasWidth) / ctx.assetWidth
+				: layer.scale;
 	const clampedScale = Math.max(baseScale, MIN_TRANSFORM_SCALE);
 
 	const rotate = clampRotate(layer.rotate);
@@ -233,9 +244,10 @@ export function elementToKlipLayer(
 		start,
 		dur,
 		full,
-		// Dari timeline saja niat user tidak terbaca; "start" adalah default
-		// netral. Panel brand mempertahankan pilihan anchor dari draft.
+		// Dari timeline saja niat user tidak terbaca; "start"/"free" adalah
+		// default netral. Panel brand mempertahankan pilihan dari draft.
 		anchor: "start",
+		fit: "free",
 		duck: (element.params["duck"] as boolean) ?? false,
 		opacity: ((element.params["opacity"] as number) ?? 1) * 100,
 		z: 0,

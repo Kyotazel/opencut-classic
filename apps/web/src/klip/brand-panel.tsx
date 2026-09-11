@@ -813,15 +813,29 @@ function LayerInspector({
 				</Button>
 			</div>
 
-			<Field label={`Scale (${layer.scale.toFixed(2)})`}>
-				<Slider
-					value={[layer.scale]}
-					min={0.01}
-					max={3}
-					step={0.01}
-					onValueChange={([v]) => v !== undefined && onField({ scale: v })}
+			<div className="flex items-center justify-between gap-2">
+				<Label className="text-xs">Lebar penuh</Label>
+				<Switch
+					checked={layer.fit === "full_width"}
+					onCheckedChange={(on) =>
+						onField({ fit: on ? "full_width" : "free" })
+					}
 				/>
-			</Field>
+			</div>
+
+			{/* Saat lebar penuh, skala dihitung sistem agar lebar tepat selebar
+			    kanvas; slider manual akan saling bertentangan. */}
+			{layer.fit !== "full_width" && (
+				<Field label={`Scale (${layer.scale.toFixed(2)})`}>
+					<Slider
+						value={[layer.scale]}
+						min={0.01}
+						max={3}
+						step={0.01}
+						onValueChange={([v]) => v !== undefined && onField({ scale: v })}
+					/>
+				</Field>
+			)}
 
 			<div className="grid grid-cols-2 gap-2">
 				<Field label="Position X">
