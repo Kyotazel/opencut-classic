@@ -9,8 +9,8 @@ import { storageService } from "@/services/storage/service";
 import { CURRENT_PROJECT_VERSION } from "@/services/storage/migrations";
 import { buildElementFromMedia } from "@/timeline/element-utils";
 import { DEFAULT_NEW_ELEMENT_DURATION } from "@/timeline/creation";
+import { buildEmptyTrack } from "@/timeline/placement/track-factory";
 import { buildDefaultScene, getProjectDurationFromScenes } from "@/timeline/scenes";
-import type { TimelineElement } from "@/timeline/types";
 import { generateUUID } from "@/utils/id";
 import { mediaTimeFromSeconds } from "@/wasm";
 
@@ -66,8 +66,19 @@ export async function createProjectFromServerVideo({
 			startTime: mediaTimeFromSeconds({ seconds: 0 }),
 		}),
 		id: generateUUID(),
-	} as TimelineElement;
-	scene.tracks.main.elements.push(element);
+	};
+
+	// Track main hanya menerima video/image. Audio harus punya track sendiri,
+	// kalau tidak ia jadi elemen yang tidak dikenali track-nya. Varian lain
+	// (text/sticker/graphic/effect) tidak mungkin dihasilkan buildElementFromMedia.
+	if (element.type === "audio") {
+		scene.tracks.audio.push({
+			...buildEmptyTrack({ id: generateUUID(), type: "audio" }),
+			elements: [element],
+		});
+	} else if (element.type === "video" || element.type === "image") {
+		scene.tracks.main.elements.push(element);
+	}
 
 	const projectId = generateUUID();
 	const project: TProject = {

@@ -173,7 +173,8 @@ export function BrandPanel() {
 				const track = tracks.find((t) => t.id === draft.trackId);
 				const element = track?.elements.find((e) => e.id === draft.elementId);
 				if (!element) continue;
-				const media = mediaAssets.find((a) => a.id === element.mediaId);
+				const mediaId = "mediaId" in element ? element.mediaId : null;
+				const media = mediaAssets.find((a) => a.id === mediaId);
 				const assetWidth = draft.assetWidth ?? media?.width ?? null;
 				const assetHeight = draft.assetHeight ?? media?.height ?? null;
 				const raw = elementToKlipLayer(element, {
@@ -250,7 +251,15 @@ export function BrandPanel() {
 			const body = (await res.json()) as { layer: KlipBrandLayer };
 			setLayers((prev) =>
 				prev.map((l) =>
-					l.id === id ? { ...body.layer, elementId: l.elementId, trackId: l.trackId } : l,
+					l.id === id
+						? {
+								...body.layer,
+								elementId: l.elementId,
+								trackId: l.trackId,
+								assetWidth: l.assetWidth,
+								assetHeight: l.assetHeight,
+							}
+						: l,
 				),
 			);
 			return body.layer;
