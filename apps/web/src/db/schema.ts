@@ -121,6 +121,8 @@ export const klipBrandLayers = mysqlTable("klip_brand_layers", {
 	rotate: double("rotate").default(0).notNull(),
 	opacity: int("opacity").default(100).notNull(),
 	full: boolean("full").default(true).notNull(),
+	// "main_end" = layer selalu mulai tepat saat video utama habis (post-roll).
+	anchor: mysqlEnum("anchor", ["start", "main_end"]).default("start").notNull(),
 	start: double("start").default(0).notNull(),
 	dur: double("dur").default(0).notNull(),
 	volume: double("volume").default(0.35).notNull(),

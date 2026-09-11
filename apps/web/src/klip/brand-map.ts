@@ -18,6 +18,7 @@
  * fungsi ini di browser di mana `@/wasm` sudah hidup — tidak ada konflik.
  */
 import type { ParamValues } from "@/params";
+import type { TemplateAnchor } from "@/klip/template-resolve";
 import type {
 	CreateAudioElement,
 	CreateImageElement,
@@ -68,6 +69,8 @@ export interface KlipBrandLayer {
 	start: number;
 	dur: number;
 	full: boolean;
+	/** "main_end" = mulai tepat saat video utama habis (post-roll). */
+	anchor: TemplateAnchor;
 	volume: number;
 	duck: boolean;
 	opacity: number;
@@ -230,6 +233,9 @@ export function elementToKlipLayer(
 		start,
 		dur,
 		full,
+		// Dari timeline saja niat user tidak terbaca; "start" adalah default
+		// netral. Panel brand mempertahankan pilihan anchor dari draft.
+		anchor: "start",
 		duck: (element.params["duck"] as boolean) ?? false,
 		opacity: ((element.params["opacity"] as number) ?? 1) * 100,
 		z: 0,

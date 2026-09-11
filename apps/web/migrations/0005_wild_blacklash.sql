@@ -1,0 +1,1 @@
+ALTER TABLE `klip_brand_layers` ADD `anchor` enum('start','main_end') DEFAULT 'start' NOT NULL;

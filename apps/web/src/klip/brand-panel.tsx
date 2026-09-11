@@ -876,27 +876,49 @@ function LayerInspector({
 
 			<div className="flex items-center justify-between gap-2">
 				<Label className="text-xs">Full duration</Label>
-				<Switch checked={layer.full} onCheckedChange={(full) => onField({ full })} />
+				<Switch
+					checked={layer.full}
+					onCheckedChange={(full) =>
+						onField(full ? { full, anchor: "start", start: 0, dur: 0 } : { full })
+					}
+				/>
 			</div>
 
 			{!layer.full && (
-				<div className="grid grid-cols-2 gap-2">
-					<Field label="Start (s)">
-						<Input
-							size="sm"
-							type="number"
-							step={0.1}
-							min={0}
-							defaultValue={layer.start}
-							key={`s-${layer.id}-${layer.start}`}
-							onBlur={(e) =>
-								onField({
-									start: Math.max(0, num(e.target.value, layer.start)),
-									dur: layer.dur > 0 ? layer.dur : Math.max(0.1, totalDuration - Math.max(0, num(e.target.value, layer.start))),
-								})
-							}
-						/>
-					</Field>
+				<div className="flex items-center justify-between gap-2">
+					<Label className="text-xs">Di akhir video</Label>
+					<Switch
+						checked={layer.anchor === "main_end"}
+						onCheckedChange={(on) =>
+							onField({
+								anchor: on ? "main_end" : "start",
+								...(on ? { start: 0 } : {}),
+							})
+						}
+					/>
+				</div>
+			)}
+
+			{!layer.full && (
+				<div className={layer.anchor === "main_end" ? "" : "grid grid-cols-2 gap-2"}>
+					{layer.anchor !== "main_end" && (
+						<Field label="Start (s)">
+							<Input
+								size="sm"
+								type="number"
+								step={0.1}
+								min={0}
+								defaultValue={layer.start}
+								key={`s-${layer.id}-${layer.start}`}
+								onBlur={(e) =>
+									onField({
+										start: Math.max(0, num(e.target.value, layer.start)),
+										dur: layer.dur > 0 ? layer.dur : Math.max(0.1, totalDuration - Math.max(0, num(e.target.value, layer.start))),
+									})
+								}
+							/>
+						</Field>
+					)}
 					<Field label="Duration (s)">
 						<Input
 							size="sm"

@@ -191,7 +191,16 @@ describe("brand template save-as and apply", () => {
 
 		for (const payload of [
 			{ kind: "image", file: "brand/logo.png", name: "Logo", full: true },
-			{ kind: "video", file: "brand/ads.mp4", name: "Ads", full: false, start: 50.1, dur: 20 },
+			{
+				kind: "video",
+				file: "brand/ads.mp4",
+				name: "Ads",
+				full: false,
+				// Post-roll ditandai eksplisit, tidak lagi ditebak dari start/dur.
+				anchor: "main_end",
+				start: 0,
+				dur: 20,
+			},
 		]) {
 			const res = await createLayer(
 				req({
@@ -237,7 +246,8 @@ describe("brand template save-as and apply", () => {
 		expect(logo.full).toBe(true);
 		expect(logo.anchor).toBe("start");
 		expect(ads.anchor).toBe("main_end");
-		expect(ads.start).toBeCloseTo(0.1, 9);
+		// Offset 0 = mulai tepat saat video utama habis, di durasi berapa pun.
+		expect(ads.start).toBeCloseTo(0, 9);
 	});
 
 	test("save-as meng-anchor ekor yang menjulur (kasus Belakang)", async () => {
@@ -255,7 +265,16 @@ describe("brand template save-as and apply", () => {
 
 		for (const payload of [
 			{ kind: "image", file: "brand/wm.png", name: "WM", full: true },
-			{ kind: "audio", file: "brand/bgm.mp3", name: "BGM", full: false, start: 26.9, dur: 9.53 },
+			{
+				kind: "audio",
+				file: "brand/bgm.mp3",
+				name: "BGM",
+				full: false,
+				// "di akhir video": mulai 30.1-3.2 = 26.9 pada main 30.1.
+				anchor: "main_end",
+				start: -3.2,
+				dur: 9.53,
+			},
 		]) {
 			const res = await createLayer(
 				req({

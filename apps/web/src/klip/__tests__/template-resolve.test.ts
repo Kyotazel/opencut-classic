@@ -31,4 +31,32 @@ describe("template-resolve", () => {
 			]),
 		).toBeCloseTo(70.1, 9);
 	});
+
+	test("post-roll menempel tepat di ujung video 25 detik", () => {
+		// Layer ditandai "di akhir video": start 0, dur 7 (ads).
+		const r = resolveTemplateLayer(
+			{ anchor: "main_end", full: false, start: 0, dur: 7 },
+			25,
+		);
+		expect(r.start).toBeCloseTo(25, 9);
+		expect(r.dur).toBe(7);
+	});
+
+	test("post-roll yang sama menempel di ujung video 30 detik", () => {
+		// Template identik harus ikut bergeser ke 30, bukan tetap di 25.
+		const r = resolveTemplateLayer(
+			{ anchor: "main_end", full: false, start: 0, dur: 7 },
+			30,
+		);
+		expect(r.start).toBeCloseTo(30, 9);
+		expect(r.dur).toBe(7);
+	});
+
+	test("total duration memanjang 30 + 7 = 37", () => {
+		const layer = resolveTemplateLayer(
+			{ anchor: "main_end", full: false, start: 0, dur: 7 },
+			30,
+		);
+		expect(resolveTotalDuration(30, [layer])).toBeCloseTo(37, 9);
+	});
 });

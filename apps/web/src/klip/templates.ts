@@ -110,25 +110,27 @@ export async function resolveMainDuration({
 	return null;
 }
 
+/**
+ * Tentukan anchor template dari pilihan user, bukan tebakan.
+ *
+ * Layer yang ditandai "di akhir video" (anchor main_end) disimpan dengan
+ * offset 0 supaya saat di-apply ia mulai tepat di ujung video tujuan —
+ * video 25s -> 25.0, video 30s -> 30.0. Cadangan lama (menebak dari
+ * start + dur terhadap mainDuration) menghasilkan offset negatif yang
+ * bergantung pada durasi project sumber, sehingga meleset di video lain.
+ */
 function toTemplateAnchor({
+	anchor,
 	full,
 	start,
-	dur,
-	mainDuration,
 }: {
+	anchor: TemplateAnchor;
 	full: boolean;
 	start: number;
-	dur: number;
-	mainDuration: number | null;
 }): { anchor: TemplateAnchor; start: number } {
-	if (full || mainDuration == null) {
-		return { anchor: "start", start };
-	}
-	// Ekor yang menjulur melewati ujung main (mis. BGM 26.9-36.4 saat main
-	// 30.1) di-anchor ke main_end; offset boleh negatif (outro di dalam main).
-	if (start >= mainDuration || start + dur > mainDuration) {
-		return { anchor: "main_end", start: start - mainDuration };
-	}
+	// Layer full selalu menutupi seluruh durasi; anchor tidak relevan.
+	if (full) return { anchor: "start", start: 0 };
+	if (anchor === "main_end") return { anchor: "main_end", start: 0 };
 	return { anchor: "start", start };
 }
 
@@ -150,14 +152,12 @@ export async function saveAsTemplate({
 	if (!project) return null;
 	const template = await createTemplate({ name: trimmed });
 	const layers = await listLayers({ projectId });
-	const mainDuration = await resolveMainDuration({ project });
 	let n = 0;
 	for (const l of layers) {
 		const { anchor, start } = toTemplateAnchor({
+			anchor: l.anchor as TemplateAnchor,
 			full: l.full,
 			start: l.start,
-			dur: l.dur,
-			mainDuration,
 		});
 		await db.insert(klipBrandTemplateLayers).values({
 			id: newBrandId({ prefix: "tlyr" }),
@@ -231,6 +231,9 @@ export async function applyTemplate({
 			rotate: layer.rotate,
 			opacity: layer.opacity,
 			full: layer.full,
+			// Simpan anchor template supaya niat "di akhir video" tidak hilang
+			// saat layer ini disimpan ulang jadi template lain.
+			anchor: layer.anchor,
 			start: r.start,
 			dur: r.dur,
 			volume: layer.volume,
