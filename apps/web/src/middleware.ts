@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE, verifySession } from "@/klip/auth-session";
+import { absoluteUrl } from "@/utils/url";
 
 export const config = {
 	matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\..*).*)"],
@@ -28,11 +29,13 @@ export async function middleware(request: NextRequest) {
 		if (pathname.startsWith("/api/")) {
 			return NextResponse.json({ error: "Auth belum dikonfigurasi di server" }, { status: 503 });
 		}
-		return NextResponse.redirect(new URL("/", request.url));
+		return NextResponse.redirect(
+			absoluteUrl({ path: "/", requestUrl: request.url }),
+		);
 	}
 	if (await hasSession({ request })) return NextResponse.next();
 	if (pathname.startsWith("/api/")) {
 		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 	}
-	return NextResponse.redirect(new URL("/", request.url));
+	return NextResponse.redirect(absoluteUrl({ path: "/", requestUrl: request.url }));
 }

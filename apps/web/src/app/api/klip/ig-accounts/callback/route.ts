@@ -8,6 +8,7 @@ import {
 	fetchIgProfile,
 } from "@/klip/ig-api";
 import { encryptToken } from "@/klip/ig-token";
+import { absoluteUrl } from "@/utils/url";
 
 function fail({ message, status }: { message: string; status?: number }): NextResponse {
 	return NextResponse.json({ error: message }, { status });
@@ -57,7 +58,9 @@ export async function GET(request: NextRequest) {
 			error instanceof Error ? error.message : "Gagal menghubungkan akun";
 		return fail({ message, status: 500 });
 	}
-	const res = NextResponse.redirect(new URL("/instagram?connected=1", request.url));
+	const res = NextResponse.redirect(
+		absoluteUrl({ path: "/instagram?connected=1", requestUrl: request.url }),
+	);
 	res.cookies.delete("ig_oauth_state");
 	return res;
 }
