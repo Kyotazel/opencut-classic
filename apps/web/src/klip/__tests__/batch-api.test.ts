@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq, inArray } from "drizzle-orm";
 import type { NextRequest } from "next/server";
-import { db, klipBatchJobs, klipBatches, klipSettings, users } from "@/db";
+import { db, klipBatchJobs, klipBatches, klipSettings } from "@/db";
 import { POST as createBatchRoute } from "@/app/api/klip/batches/route";
 import { listZipEntries } from "@/klip/batch-store";
 import {
@@ -17,8 +17,6 @@ import {
 } from "@/klip/settings";
 
 const createdBatchIds: string[] = [];
-const TEST_OWNER_ID = "u_batchtestowner";
-let seededOwner = false;
 let fixtureDir = "";
 let zipPath = "";
 let emptyZipPath = "";
@@ -53,17 +51,9 @@ function multipartReq({ file, templateId }: { file: File; templateId?: string })
 }
 
 beforeAll(async () => {
-	// Keputusan #6 memakai user pertama sebagai owner. DB uji bisa kosong,
-	// jadi pastikan ada satu user (dibersihkan lagi di afterAll).
-	const existing = await db.select({ id: users.id }).from(users).limit(1);
-	if (!existing[0]) {
-		await db.insert(users).values({
-			id: TEST_OWNER_ID,
-			name: "Batch Test Owner",
-			email: "batch-test-owner@example.test",
-		});
-		seededOwner = true;
-	}
+	// Owner berasal dari env (keputusan #6 revisi), bukan tabel users.
+	process.env.APP_USER = "ordo";
+	delete process.env.KLIP_OWNER_ID;
 	process.env.KLIP_DATA_ROOT = await mkdtemp(path.join(tmpdir(), "klip-batches-"));
 	fixtureDir = await mkdtemp(path.join(tmpdir(), "klip-batches-fixture-"));
 	zipPath = path.join(fixtureDir, "batch.zip");
@@ -83,9 +73,6 @@ afterAll(async () => {
 		await db.delete(klipBatches).where(inArray(klipBatches.id, createdBatchIds)).catch(() => {});
 	}
 	await db.delete(klipSettings).where(inArray(klipSettings.key, Object.values(SETTING_KEYS))).catch(() => {});
-	if (seededOwner) {
-		await db.delete(users).where(eq(users.id, TEST_OWNER_ID)).catch(() => {});
-	}
 	if (process.env.KLIP_DATA_ROOT) {
 		await rm(process.env.KLIP_DATA_ROOT, { recursive: true, force: true });
 		delete process.env.KLIP_DATA_ROOT;
@@ -141,62 +128,55 @@ describe("listZipEntries", () => {
 	});
 });
 
-describe("owner resolution tanpa tabel users", () => {
-	// Login app ini memakai cookie APP_USER, bukan Better Auth, jadi tabel
-	// users bisa kosong walau ada yang login. Batch tidak boleh ditolak 409.
-	test("memakai identitas sesi saat tabel users kosong", async () => {
-		const saved = await db.select({ id: users.id }).from(users);
-		await db.delete(users);
+describe("owner resolution dari env", () => {
+	// Login app ini memakai APP_USER (cookie HMAC), bukan Better Auth, jadi
+	// tabel users kosong. Owner diambil dari env supaya sumbernya tunggal.
+	test("memakai KLIP_OWNER_ID kalau diisi", async () => {
+		process.env.KLIP_OWNER_ID = "batchsvc";
 		try {
 			const buf = await Bun.file(zipPath).arrayBuffer();
-			const form = new FormData();
-			form.append("file", new File([buf], "batch.zip", { type: "application/zip" }));
 			const res = await createBatchRoute(
-				req({
-					url: "http://localhost/api/klip/batches",
-					init: {
-						method: "POST",
-						headers: { cookie: "klip_session=" + encodeURIComponent("ordo:9999999999999.deadbeef") },
-						body: form,
-					},
-				}),
+				multipartReq({ file: new File([buf], "batch.zip", { type: "application/zip" }) }),
 			);
 			expect(res.status).toBe(202);
 			const body = (await res.json()) as { batchId: string };
 			createdBatchIds.push(body.batchId);
 			const rows = await db.select().from(klipBatches).where(eq(klipBatches.id, body.batchId));
-			expect(rows[0]!.ownerUserId).toBe("app:ordo");
+			expect(rows[0]!.ownerUserId).toBe("app:batchsvc");
 		} finally {
-			// Pulihkan user supaya tes lain tidak terpengaruh.
-			if (saved[0]) {
-				await db.insert(users).values({
-					id: saved[0].id,
-					name: "Batch Test Owner",
-					email: "batch-test-owner@example.test",
-				});
-				seededOwner = true;
-			}
+			delete process.env.KLIP_OWNER_ID;
 		}
 	});
 
-	test("menolak 409 hanya kalau tidak ada user DAN tidak ada sesi", async () => {
-		const saved = await db.select({ id: users.id }).from(users);
-		await db.delete(users);
+	test("jatuh ke APP_USER kalau KLIP_OWNER_ID kosong", async () => {
+		delete process.env.KLIP_OWNER_ID;
+		process.env.APP_USER = "ordo";
+		const buf = await Bun.file(zipPath).arrayBuffer();
+		const res = await createBatchRoute(
+			multipartReq({ file: new File([buf], "batch.zip", { type: "application/zip" }) }),
+		);
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as { batchId: string };
+		createdBatchIds.push(body.batchId);
+		const rows = await db.select().from(klipBatches).where(eq(klipBatches.id, body.batchId));
+		expect(rows[0]!.ownerUserId).toBe("app:ordo");
+	});
+
+	test("menolak 409 kalau env owner tidak ada sama sekali", async () => {
+		const savedUser = process.env.APP_USER;
+		delete process.env.KLIP_OWNER_ID;
+		delete process.env.APP_USER;
 		try {
 			const buf = await Bun.file(zipPath).arrayBuffer();
 			const res = await createBatchRoute(
 				multipartReq({ file: new File([buf], "batch.zip", { type: "application/zip" }) }),
 			);
 			expect(res.status).toBe(409);
+			// Tidak boleh ada baris batch yang tertinggal.
+			const body = (await res.json()) as { error: string };
+			expect(body.error).toMatch(/owner/i);
 		} finally {
-			if (saved[0]) {
-				await db.insert(users).values({
-					id: saved[0].id,
-					name: "Batch Test Owner",
-					email: "batch-test-owner@example.test",
-				});
-				seededOwner = true;
-			}
+			if (savedUser) process.env.APP_USER = savedUser;
 		}
 	});
 });

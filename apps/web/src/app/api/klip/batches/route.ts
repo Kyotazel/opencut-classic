@@ -4,7 +4,6 @@ import { MAX_ZIP_BYTES } from "@/klip/batch-upload";
 import { listZipEntries, saveBatchZip } from "@/klip/batch-store";
 import { createBatch, resolveDefaultOwnerUserId } from "@/klip/batch-service";
 import { dataRoot, UploadError } from "@/klip/upload";
-import { SESSION_COOKIE } from "@/klip/auth-session";
 
 /**
  * POST /api/klip/batches — catat batch, JANGAN kerjakan (Tahap 1).
@@ -22,36 +21,13 @@ async function jobCountFor({ absPath }: { absPath: string }): Promise<string[]> 
 }
 
 /**
- * Pemilik batch (keputusan #6). Memakai user pertama di tabel `users`, atau
- * jatuh ke identitas sesi login — karena login app ini memakai cookie
- * APP_USER, bukan Better Auth, sehingga tabel `users` bisa kosong.
+ * Pemilik batch (keputusan #6) berasal dari ENV: KLIP_OWNER_ID, atau APP_USER.
+ * Tidak membaca tabel `users` — lihat catatan di klip/batch-service.ts.
+ * Mengembalikan null kalau keduanya kosong, supaya caller menolak dengan
+ * pesan jelas alih-alih menulis ownerUserId yang tidak berarti.
  */
-async function requireOwner({ request }: { request: NextRequest }): Promise<string | null> {
-	return resolveDefaultOwnerUserId({ sessionUser: sessionUserId({ request }) });
-}
-
-/**
- * Baca nama user dari cookie sesi. Middleware sudah memverifikasi tanda
- * tangannya sebelum route ini berjalan, jadi di sini cukup membaca payload.
- */
-function sessionUserId({ request }: { request: NextRequest }): string | null {
-	// Dibaca dari header Cookie, bukan request.cookies, supaya jalur ini juga
-	// bisa diuji dengan Request biasa (tanpa NextRequest penuh).
-	const raw = request.headers.get("cookie") ?? "";
-	const cookie = raw
-		.split(";")
-		.map((part) => part.trim())
-		.find((part) => part.startsWith(`${SESSION_COOKIE}=`))
-		?.slice(SESSION_COOKIE.length + 1);
-	if (!cookie) return null;
-	const decoded = decodeURIComponent(cookie);
-	const dot = decoded.lastIndexOf(".");
-	if (dot < 0) return null;
-	const payload = decoded.slice(0, dot);
-	const sep = payload.indexOf(":");
-	if (sep < 0) return null;
-	const user = payload.slice(0, sep);
-	return user || null;
+function requireOwner(): string | null {
+	return resolveDefaultOwnerUserId();
 }
 
 function noOwnerResponse() {
@@ -105,7 +81,7 @@ export async function POST(request: NextRequest) {
 				? body.template_id.trim()
 				: null;
 		// Owner dicek setelah body valid, supaya request cacat tetap 400.
-		const ownerUserId = await requireOwner({ request });
+		const ownerUserId = requireOwner();
 		if (!ownerUserId) return noOwnerResponse();
 		// Ambil ZIP dari URL. Batas ukuran diperiksa dari header sebelum unduh
 		// supaya URL besar tidak menghabiskan memori lebih dulu.
@@ -171,7 +147,7 @@ export async function POST(request: NextRequest) {
 	const rawTemplate = form.get("templateId");
 	const templateId =
 		typeof rawTemplate === "string" && rawTemplate.trim() ? rawTemplate.trim() : null;
-	const ownerUserId = await requireOwner({ request });
+	const ownerUserId = requireOwner();
 	if (!ownerUserId) return noOwnerResponse();
 	return await persist({
 		bytes: Buffer.from(await file.arrayBuffer()),

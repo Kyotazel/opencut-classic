@@ -139,7 +139,7 @@ Karena rate limit IG. Worker mencoba -> gagal karena limit -> **kembalikan ke an
 | Kolom | Tipe | Keterangan |
 |---|---|---|
 | `id` | varchar(64) PK | prefix `b_` |
-| `owner_user_id` | varchar(64) | **user ID pertama** (keputusan #6) |
+| `owner_user_id` | varchar(64) | **dari env** `KLIP_OWNER_ID` atau `APP_USER` (keputusan #6 revisi) |
 | `template_id` | varchar(64) nullable | null = pakai default global |
 | `source` | enum(`upload`,`api`) | dari UI atau dari sistem lain |
 | `zip_path` | varchar(1024) | lokasi ZIP tersimpan |
@@ -211,7 +211,10 @@ Setiap tahap **berdiri sendiri** - bisa dipakai dan diuji tanpa menunggu tahap b
 **Notes:**
 - **T1-1** Dukung **dua** bentuk input sejak awal (`multipart` untuk UI, `zip_url` untuk API). Konsekuensi: worker harus bisa *download* + *verifikasi*, bukan cuma baca buffer.
 - **T1-2** `/api/uploads/batch` sekarang punya **dua batas yang bertentangan**: kode izinkan 2 GB, nginx dibatasi `client_max_body_size 500m`. Harus diselaraskan di tahap ini.
-- **T1-3** Pemilik = "user ID pertama". **Sengaja pragmatis.** Saat API-driven nanti tidak ada user login, jadi pinjaman ini harus diganti dengan `owner` per-request atau service account. Perlu migrasi data saat itu - dicatat supaya tidak kaget.
+- **T1-3** Pemilik = dari **env** (`KLIP_OWNER_ID`, fallback `APP_USER`), nilai disimpan sebagai `app:<nilai>`. **Sengaja pragmatis.**
+  - **Revisi penting:** rancangan awal memakai "user pertama di tabel `users`". Itu **salah** dan langsung terlihat saat diuji di browser (HTTP 409): login app ini memakai cookie HMAC dari `APP_USER`/`APP_PASSWORD` (`klip/auth-session.ts`), **bukan Better Auth**, sehingga tabel `users` **kosong** di lokal maupun produksi. 10 project yang ada dibuat oleh `resolveOrCreateProject` yang menyusun barisnya sendiri.
+  - Kode sengaja **tidak** membaca tabel `users` sama sekali. Kalau kelak tabel itu terisi (Better Auth dinyalakan), owner batch tidak boleh diam-diam berpindah — sumber harus satu dan eksplisit.
+  - Saat API-driven nanti tidak ada user login, jadi ini diganti `owner` per-request (Tahap 5). Perlu migrasi data saat itu - dicatat supaya tidak kaget.
 - **T1-4** ZIP disimpan ke disk (`KLIP_DATA_ROOT`), **jangan** in-memory. `yauzl.fromBuffer` sekarang memuat seluruh ZIP ke RAM - tidak aman untuk 500 MB+.
 
 ### Tahap 2 - Worker: extract + buat project + tempel template
@@ -302,6 +305,12 @@ Dua bug sebelumnya (anchor post-roll salah, angka 25.84 di video 30 detik) berak
 | 4 | Cara worker jalan | Belum - diputuskan saat Tahap 2 |
 | 5 | Tampilan project batch di UI (T2-1) | Belum - diputuskan saat Tahap 2 |
 | 6 | Autentikasi API sistem lain (T5-2) | Belum - diputuskan saat Tahap 5 |
+
+### Revisi keputusan
+
+| Keputusan awal | Revisi | Sebab |
+|---|---|---|
+| Pemilik batch = **user pertama** di tabel `users` (bagian 2 #6) | Pemilik = **env** `KLIP_OWNER_ID` (fallback `APP_USER`), disimpan `app:<nilai>` | Tabel `users` ternyata **kosong** - login memakai cookie `APP_USER`, bukan Better Auth. Rancangan awal menghasilkan HTTP 409 saat diuji di browser. Detail di T1-3. |
 
 ---
 

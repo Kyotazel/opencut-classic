@@ -29,6 +29,9 @@ const webEnvSchema = z.object({
 	IG_REDIRECT_URI: z.string().optional(),
 	IG_TOKEN_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/).optional(),
 
+	// Pemilik batch (opsional). Kosong = pakai APP_USER. Lihat klip/batch-service.ts.
+	KLIP_OWNER_ID: z.string().optional(),
+
 	// Shared login (opsional; wajib diisi di server sebelum login dipakai)
 	APP_USER: z.string().optional(),
 	APP_PASSWORD: z.string().optional(),

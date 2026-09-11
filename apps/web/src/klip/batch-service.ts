@@ -1,39 +1,35 @@
 import { asc, eq } from "drizzle-orm";
-import { db, klipBatchJobs, klipBatches, users } from "@/db";
+import { db, klipBatchJobs, klipBatches } from "@/db";
 import { newBatchRowId, newJobId } from "@/klip/batch-store";
 import { resolveBatchSettings } from "@/klip/settings";
 
 export type BatchSource = "upload" | "api";
 
 /**
- * Pemilik batch (keputusan #6).
+ * Pemilik batch (keputusan #6): diambil dari ENV, bukan dari tabel `users`.
  *
- * PENTING: login di aplikasi ini memakai cookie HMAC dari APP_USER/APP_PASSWORD
- * (lihat klip/auth-session.ts), BUKAN Better Auth. Akibatnya tabel `users`
- * sering KOSONG walaupun seseorang sedang login — proyek tetap bisa dibuat
- * karena resolveOrCreateProject membuat barisnya sendiri.
+ * Kenapa env: login app ini memakai cookie HMAC dari APP_USER/APP_PASSWORD
+ * (klip/auth-session.ts), BUKAN Better Auth. Tabel `users` karena itu KOSONG
+ * di produksi maupun lokal, dan proyek tetap bisa dibuat karena
+ * resolveOrCreateProject menyusun barisnya sendiri.
  *
- * Jadi urutannya:
- *   1. user pertama di tabel `users` (kalau ada — mis. Better Auth aktif)
- *   2. nama user dari sesi login (APP_USER), ditulis sebagai owner sintetis
+ * Sengaja TIDAK membaca tabel `users`: kalau suatu saat tabel itu terisi
+ * (mis. Better Auth dinyalakan), owner batch akan diam-diam berpindah dari
+ * env ke user pertama. Sistem tidak boleh menebak seperti itu — sumbernya
+ * harus satu dan eksplisit.
  *
- * Ini tetap pinjaman sampai Tahap 5 menggantinya dengan owner per-request.
+ * Prioritas:
+ *   1. KLIP_OWNER_ID  - khusus batch; pakai ini kalau batch bukan milik orang
+ *   2. APP_USER       - identitas login yang sudah dipakai app ini
+ *
+ * Tahap 5 (API-driven) menggantinya dengan owner per-request.
  */
-export async function resolveDefaultOwnerUserId({
-	sessionUser,
-}: {
-	sessionUser?: string | null;
-} = {}): Promise<string | null> {
-	const rows = await db
-		.select({ id: users.id })
-		.from(users)
-		.orderBy(asc(users.createdAt))
-		.limit(1);
-	if (rows[0]) return rows[0].id;
-	// Owner sintetis: identitas login yang sebenarnya dipakai app ini.
-	const name = sessionUser?.trim();
-	if (!name) return null;
-	return `app:${name}`.slice(0, 64);
+export function resolveDefaultOwnerUserId(): string | null {
+	const explicit = process.env.KLIP_OWNER_ID?.trim();
+	if (explicit) return `app:${explicit}`.slice(0, 64);
+	const sessionUser = process.env.APP_USER?.trim();
+	if (sessionUser) return `app:${sessionUser}`.slice(0, 64);
+	return null;
 }
 
 export type CreateBatchInput = {
