@@ -326,57 +326,132 @@ Dua bug sebelumnya (anchor post-roll salah, angka 25.84 di video 30 detik) berak
 
 ## 11. JEBAKAN MIGRASI - baca sebelum deploy ke server!
 
-Saat mengerjakan Tahap 1 ditemukan bahwa **`drizzle_migrations` lokal berisi hash yang salah**.
-Baris 5-7 diisi manual waktu rekonsiliasi sebelumnya, tetapi hash-nya tidak cocok dengan nama file.
+`drizzle_migrations` di database **lokal** ternyata rusak selama beberapa sesi. Ini bukan
+sekadar catatan sejarah - jebakan yang sama bisa terjadi di server saat deploy.
 
-**Kenapa berbahaya:** `drizzle-kit migrate` membandingkan hash **berdasarkan urutan**, bukan nama file.
-Karena hash baris 7 kebetulan sama dengan isi file **0006**, drizzle menganggap 0006 *dan* 0007 sudah
-diterapkan, lalu **mencatat 0007 sebagai sukses tanpa menjalankan satu pun DDL-nya**.
-Hasilnya: migrasi "berhasil" tetapi tabelnya tidak ada. Ini kelas kegagalan senyap yang sama dengan
-insiden `drizzle-kit` vs `bun` sebelumnya.
+### Apa yang salah
 
-**Wajib dicek di server (`third`) sebelum migrate:**
+Ledger lokal berisi 7 baris, tetapi hash-nya **tidak cocok dengan nama file**:
+
+| id | hash tercatat seharusnya milik |
+|---|---|
+| 1-4 | benar |
+| 5 | (basi, tidak cocok file mana pun) |
+| 6 | file **0005** |
+| 7 | file **0006** |
+
+Yang lebih buruk: hash file **`0004_bouncy_nextwave` ada di NOL baris** - migrasi itu tidak
+pernah tercatat, padahal tabel `klip_sync_media` / `klip_sync_projects` sudah dibuat manual.
+
+### Kenapa ini berbahaya
+
+`drizzle-kit migrate` mencocokkan hash **berdasarkan urutan**, bukan nama file. Karena hash
+baris 7 kebetulan sama dengan isi file **0006**, drizzle menyimpulkan 0006 *dan* 0007 sudah
+diterapkan, lalu **mencatat 0007 sebagai "sukses" tanpa menjalankan satu pun DDL-nya**.
+
+Hasilnya: **migrasi melaporkan sukses, tetapi tabelnya tidak ada.** Persis kelas kegagalan
+senyap yang sama dengan insiden `drizzle-kit` vs `bun` sebelumnya. Kalau ini terjadi di server,
+`/api/klip/batches` akan error 500 sementara semua log tampak normal.
+
+### Fakta penting: `id` bersifat 1-BASED
+
+`drizzle_migrations.id` **bukan** indeks journal. Pemetaannya:
+
+```
+id = (indeks journal) + 1      # id 1 <-> 0000_spooky_maelstrom
+```
+
+Ledger yang benar untuk repo ini: **id 1..8**, di mana `id 8` = `0007_demonic_mysterio`.
+Menulis 0-based akan menggeser semuanya satu langkah dan tampak "berhasil" sampai migrate
+berikutnya menambahkan baris ke-9.
+
+### Wajib dicek di server (`third`) sebelum migrate
 
 ```bash
 cd /var/www/html/klip-opencut/apps/web
 
-# 1. Hash yang tercatat
+# Hash yang tercatat
 mysql -u klip -p klip -N -e "SELECT id,hash FROM drizzle_migrations ORDER BY id;"
 
-# 2. Hash file SEBENARNYA - urutan harus sepadan dengan di atas
+# Hash file SEBENARNYA (urutan harus sepadan: id N <-> file ke-(N-1))
 for f in migrations/0*.sql; do echo "$(sha256sum "$f" | cut -d" " -f1)  $f"; done
 ```
 
-Kalau tidak sepadan: **jangan andalkan `migrate`**. Jalankan DDL-nya langsung, karena marker
-`--> statement-breakpoint` bukan SQL valid (perhatikan: marker muncul di baris sendiri DAN
-menempel setelah `;`, jadi jangan pakai anchor `^`/`$`):
+Kalau tidak sepadan, **bangun ulang ledger dari journal** (bukan menambal satu-satu):
+
+```bash
+# Bangun ulang: id = idx+1, hash = sha256 isi file
+node -e '
+  const fs=require("fs"),crypto=require("crypto");
+  const j=JSON.parse(fs.readFileSync("migrations/meta/_journal.json","utf8"));
+  const rows=j.entries.map(e=>"("+(e.idx+1)+",\x27"+crypto.createHash("sha256")
+    .update(fs.readFileSync("migrations/"+e.tag+".sql","utf8")).digest("hex")+"\x27,"+e.when+")");
+  fs.writeFileSync("/tmp/ledger.sql",
+    "DELETE FROM drizzle_migrations;\nINSERT INTO drizzle_migrations (id,hash,created_at) VALUES "+rows.join(",")+";");
+'
+
+# PERIKSA isinya dulu, baru jalankan
+cat /tmp/ledger.sql | head -3
+mysql -u klip -p klip < /tmp/ledger.sql
+```
+
+Lalu buat tabel yang belum ada. Marker `--> statement-breakpoint` **bukan SQL valid**, dan
+muncul DUA bentuk (baris sendiri, dan menempel setelah `;`), jadi jangan pakai anchor `^`/`$`:
 
 ```bash
 sed "s/--> statement-breakpoint//g" migrations/0007_demonic_mysterio.sql > /tmp/m7.sql
 mysql -u klip -p klip --force < /tmp/m7.sql
-
-# WAJIB: buktikan tabelnya benar-benar ada
-mysql -u klip -p klip -N -e "SHOW TABLES LIKE 'klip_batch%'; SHOW TABLES LIKE 'klip_settings';"
 ```
 
-`--force` dipakai supaya error "table already exists" dari percobaan parsial tidak menghentikan
-perintah berikutnya. **Selalu verifikasi tabelnya ada** - jangan percaya kata "migrasi sukses".
+`--force` supaya error "table already exists" dari percobaan parsial tidak menghentikan
+perintah berikutnya.
+
+### Verifikasi wajib (jangan percaya kata "migrasi sukses")
+
+```bash
+# 1. Struktur benar-benar ada
+mysql -u klip -p klip -N -e "SHOW TABLES LIKE 'klip_batch%'; SHOW TABLES LIKE 'klip_settings';"
+
+# 2. Migrate idempoten: jumlah baris TIDAK bertambah
+mysql -u klip -p klip -N -e "SELECT COUNT(*) FROM drizzle_migrations;"
+node ./node_modules/drizzle-kit/bin.cjs migrate
+mysql -u klip -p klip -N -e "SELECT COUNT(*) FROM drizzle_migrations;"   # harus sama
+```
+
+Kalau jumlahnya bertambah setelah migrate, ledger masih salah.
 
 ---
 
 ## 12. Langkah berikutnya
 
-**Tahap 1 selesai.** Berikutnya **Tahap 2** (worker: extract + buat project + tempel template),
-tetap **belum render** - itu Tahap 3 dan paling rapuh.
+**Tahap 1 selesai** (commit `05a1c6fd`, dokumen `98932578`). Berikutnya **Tahap 2**:
+worker yang mengekstrak ZIP, membuat project per video, dan menempelkan template.
+
+**Masih belum render** - render adalah Tahap 3 dan paling rapuh (lihat bagian 4).
 
 Yang perlu diputuskan saat Tahap 2 dimulai (bagian 9 nomor 3-5):
 
-- Lokasi kode worker: `apps/worker` atau `apps/web/scripts/`
-- Cara worker jalan: `pm2` atau `systemd`
+- Lokasi kode worker: `apps/worker` (app baru) atau `apps/web/scripts/`
+- Cara worker jalan: `pm2` (konsisten dengan app) atau `systemd`
 - Tampilan project batch di UI: semua user lihat, atau hanya owner
+
+### Deploy Tahap 1 ke server
+
+```bash
+cd /var/www/html/klip-opencut
+git pull
+cd apps/web
+
+# BACA BAGIAN 11 DULU - cek ledger sebelum migrate!
+NODE_ENV=production node ./node_modules/drizzle-kit/bin.cjs migrate
+mysql -u klip -p klip -N -e "SHOW TABLES LIKE 'klip_batch%'; SHOW TABLES LIKE 'klip_settings';"
+```
+
+Endpoint baru: `POST /api/klip/batches` (butuh sesi login; mengembalikan `202 + batch_id`).
+Belum ada UI - sengaja, karena Tahap 1 hanya membuktikan kerangkanya.
 
 ### Utang di luar proyek ini
 
-- **N3** `pm2 save` - sudah dijalankan user. Aman terhadap reboot.
-- **N2** Redis belum jalan - masih menunda `/api/feedback` dan `/api/sounds/search`.
+- **N2** Redis belum jalan - menunda `/api/feedback` dan `/api/sounds/search`.
 - **N5** Rotasi `BETTER_AUTH_SECRET`, password MySQL, dan `APP_PASSWORD`.
+- **N4** Disk `third` ~85% - wajib dicek sebelum Tahap 3 (Chromium ~400 MB).
