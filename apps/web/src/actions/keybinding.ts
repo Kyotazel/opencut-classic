@@ -4,14 +4,17 @@ import type { TActionWithOptionalArgs } from "./types";
  * Alt is also regarded as macOS OPTION (⌥) key
  * Ctrl is also regarded as macOS COMMAND (⌘) key (NOTE: this differs from HTML Keyboard spec where COMMAND is Meta key!)
  */
-export type ModifierKeys =
-	| "ctrl"
-	| "alt"
-	| "shift"
-	| "ctrl+shift"
-	| "alt+shift"
-	| "ctrl+alt"
-	| "ctrl+alt+shift";
+const MODIFIER_KEYS = [
+	"ctrl",
+	"alt",
+	"shift",
+	"ctrl+shift",
+	"alt+shift",
+	"ctrl+alt",
+	"ctrl+alt+shift",
+] as const;
+
+export type ModifierKeys = (typeof MODIFIER_KEYS)[number];
 
 const KEYS = [
 	"a", "b", "c", "d", "e", "f", "g", "h", "i", "j",
@@ -27,9 +30,14 @@ const KEYS = [
 export type Key = (typeof KEYS)[number];
 
 const KEY_SET: ReadonlySet<string> = new Set(KEYS);
+const MODIFIER_SET: ReadonlySet<string> = new Set(MODIFIER_KEYS);
 
 export function isKey(value: string): value is Key {
 	return KEY_SET.has(value);
+}
+
+export function isModifierKeys(value: string): value is ModifierKeys {
+	return MODIFIER_SET.has(value);
 }
 
 export type ModifierBasedShortcutKey = `${ModifierKeys}+${Key}`;
@@ -37,6 +45,24 @@ export type ModifierBasedShortcutKey = `${ModifierKeys}+${Key}`;
 export type SingleCharacterShortcutKey = `${Key}`;
 
 export type ShortcutKey = ModifierBasedShortcutKey | SingleCharacterShortcutKey;
+
+/**
+ * Type guard for persisted/imported shortcut keys.
+ *
+ * Accepts a single key ("space") or a modifier combination ("ctrl+shift+z").
+ * Rejects unknown modifiers and unknown keys, since a persisted blob crosses a
+ * trust boundary and may predate changes to KEY_SET/MODIFIER_KEYS.
+ */
+export function isShortcutKey(value: string): value is ShortcutKey {
+	if (value.length === 0) return false;
+	const separator = value.lastIndexOf("+");
+	if (separator === -1) return isKey(value);
+	if (separator === 0 || separator === value.length - 1) return false;
+	return (
+		isModifierKeys(value.slice(0, separator)) &&
+		isKey(value.slice(separator + 1))
+	);
+}
 
 export type KeybindingConfig = {
 	[key in ShortcutKey]?: TActionWithOptionalArgs;

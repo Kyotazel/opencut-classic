@@ -13,7 +13,7 @@
     "lint:fix": "eslint src --ext .ts,.tsx --fix",
     "format": "prettier src --write",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "node ./node_modules/drizzle-kit/bin.cjs migrate",
     "db:push:local": "cross-env NODE_ENV=development drizzle-kit push",
     "db:push:prod": "cross-env NODE_ENV=production drizzle-kit push"
   },
