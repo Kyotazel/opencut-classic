@@ -141,6 +141,66 @@ describe("listZipEntries", () => {
 	});
 });
 
+describe("owner resolution tanpa tabel users", () => {
+	// Login app ini memakai cookie APP_USER, bukan Better Auth, jadi tabel
+	// users bisa kosong walau ada yang login. Batch tidak boleh ditolak 409.
+	test("memakai identitas sesi saat tabel users kosong", async () => {
+		const saved = await db.select({ id: users.id }).from(users);
+		await db.delete(users);
+		try {
+			const buf = await Bun.file(zipPath).arrayBuffer();
+			const form = new FormData();
+			form.append("file", new File([buf], "batch.zip", { type: "application/zip" }));
+			const res = await createBatchRoute(
+				req({
+					url: "http://localhost/api/klip/batches",
+					init: {
+						method: "POST",
+						headers: { cookie: "klip_session=" + encodeURIComponent("ordo:9999999999999.deadbeef") },
+						body: form,
+					},
+				}),
+			);
+			expect(res.status).toBe(202);
+			const body = (await res.json()) as { batchId: string };
+			createdBatchIds.push(body.batchId);
+			const rows = await db.select().from(klipBatches).where(eq(klipBatches.id, body.batchId));
+			expect(rows[0]!.ownerUserId).toBe("app:ordo");
+		} finally {
+			// Pulihkan user supaya tes lain tidak terpengaruh.
+			if (saved[0]) {
+				await db.insert(users).values({
+					id: saved[0].id,
+					name: "Batch Test Owner",
+					email: "batch-test-owner@example.test",
+				});
+				seededOwner = true;
+			}
+		}
+	});
+
+	test("menolak 409 hanya kalau tidak ada user DAN tidak ada sesi", async () => {
+		const saved = await db.select({ id: users.id }).from(users);
+		await db.delete(users);
+		try {
+			const buf = await Bun.file(zipPath).arrayBuffer();
+			const res = await createBatchRoute(
+				multipartReq({ file: new File([buf], "batch.zip", { type: "application/zip" }) }),
+			);
+			expect(res.status).toBe(409);
+		} finally {
+			if (saved[0]) {
+				await db.insert(users).values({
+					id: saved[0].id,
+					name: "Batch Test Owner",
+					email: "batch-test-owner@example.test",
+				});
+				seededOwner = true;
+			}
+		}
+	});
+});
+
 describe("POST /api/klip/batches (multipart)", () => {
 	test("records a queued batch with one job per usable entry", async () => {
 		const buf = await Bun.file(zipPath).arrayBuffer();

@@ -187,6 +187,7 @@ function ProjectsHeader() {
 				<div className="flex items-center gap-3 md:gap-4">
 					<SearchBar className="hidden md:block" />
 					<UploadZipButton />
+					<QueueBatchButton />
 					<Link href="/instagram">
 						<Button variant="outline" size="sm">
 							<span className="text-sm font-medium hidden md:block">Instagram</span>
@@ -597,6 +598,71 @@ function UploadZipButton() {
 			>
 				<span className="text-sm font-medium hidden md:block">{label}</span>
 				<span className="text-sm font-medium block md:hidden">Zip</span>
+			</Button>
+		</>
+	);
+}
+
+/**
+ * Jalur ANTRIAN (Tahap 1). Berbeda dari "Upload zip" di atas yang langsung
+ * mengekstrak di browser, tombol ini hanya MENCATAT batch ke database lalu
+ * menyerahkan pekerjaan ke worker (Tahap 2). Sengaja terpisah supaya kedua
+ * jalur bisa dibandingkan tanpa mengubah perilaku yang lama.
+ *
+ * Setelah berhasil, job akan tetap berstatus "queued" — memang belum ada
+ * yang mengerjakannya sampai Tahap 2 selesai.
+ */
+function QueueBatchButton() {
+	const [busy, setBusy] = useState(false);
+	const [label, setLabel] = useState("Antrikan batch");
+	const fileRef = useRef<HTMLInputElement>(null);
+
+	const handleFile = async ({ files }: { files: FileList | null }) => {
+		if (!files || files.length === 0) return;
+		const zip = files[0]!;
+		if (fileRef.current) fileRef.current.value = "";
+		setBusy(true);
+		try {
+			setLabel(`Mengantrikan ${zip.name}...`);
+			const form = new FormData();
+			form.append("file", zip);
+			const res = await fetch("/api/klip/batches", { method: "POST", body: form });
+			const body = (await res.json().catch(() => null)) as
+				| { batchId?: string; jobCount?: number; error?: string }
+				| null;
+			if (!res.ok) {
+				throw new Error(body?.error ?? `Gagal antri: ${zip.name}`);
+			}
+			toast.success(
+				`Batch ${body?.batchId} masuk antrian (${body?.jobCount ?? 0} job). Menunggu worker.`,
+			);
+		} catch (error) {
+			console.error("Batch: queue failed", error);
+			toast.error(error instanceof Error ? error.message : "Gagal antri batch");
+		} finally {
+			setBusy(false);
+			setLabel("Antrikan batch");
+		}
+	};
+
+	return (
+		<>
+			<input
+				ref={fileRef}
+				type="file"
+				accept=".zip"
+				className="hidden"
+				onChange={(e) => void handleFile({ files: e.target.files })}
+			/>
+			<Button
+				size="lg"
+				variant="outline"
+				className="flex px-5 md:px-6"
+				disabled={busy}
+				onClick={() => fileRef.current?.click()}
+			>
+				<span className="text-sm font-medium hidden md:block">{label}</span>
+				<span className="text-sm font-medium block md:hidden">Antri</span>
 			</Button>
 		</>
 	);

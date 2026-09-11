@@ -6,20 +6,34 @@ import { resolveBatchSettings } from "@/klip/settings";
 export type BatchSource = "upload" | "api";
 
 /**
- * Pemilik sementara untuk batch (keputusan #6): user pertama di database.
+ * Pemilik batch (keputusan #6).
  *
- * Sengaja pragmatis. Saat API-driven (Tahap 5) tidak ada user login, jadi
- * ini harus diganti owner per-request / service account — lihat T1-3.
- * Mengembalikan null kalau tabel user kosong, supaya caller bisa menolak
- * dengan pesan jelas alih-alih menulis ownerUserId yang tidak ada.
+ * PENTING: login di aplikasi ini memakai cookie HMAC dari APP_USER/APP_PASSWORD
+ * (lihat klip/auth-session.ts), BUKAN Better Auth. Akibatnya tabel `users`
+ * sering KOSONG walaupun seseorang sedang login — proyek tetap bisa dibuat
+ * karena resolveOrCreateProject membuat barisnya sendiri.
+ *
+ * Jadi urutannya:
+ *   1. user pertama di tabel `users` (kalau ada — mis. Better Auth aktif)
+ *   2. nama user dari sesi login (APP_USER), ditulis sebagai owner sintetis
+ *
+ * Ini tetap pinjaman sampai Tahap 5 menggantinya dengan owner per-request.
  */
-export async function resolveDefaultOwnerUserId(): Promise<string | null> {
+export async function resolveDefaultOwnerUserId({
+	sessionUser,
+}: {
+	sessionUser?: string | null;
+} = {}): Promise<string | null> {
 	const rows = await db
 		.select({ id: users.id })
 		.from(users)
 		.orderBy(asc(users.createdAt))
 		.limit(1);
-	return rows[0]?.id ?? null;
+	if (rows[0]) return rows[0].id;
+	// Owner sintetis: identitas login yang sebenarnya dipakai app ini.
+	const name = sessionUser?.trim();
+	if (!name) return null;
+	return `app:${name}`.slice(0, 64);
 }
 
 export type CreateBatchInput = {
