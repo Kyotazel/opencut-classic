@@ -267,12 +267,24 @@ export function BrandPanel() {
 		[klipProjectId],
 	);
 
+	// Durasi video utama (track main), bukan total timeline. Dipakai untuk
+	// menaruh layer "di akhir video" tepat setelah main habis.
+	const mainTrackDuration = useCallback((): number => {
+		try {
+			const scene = editor.scenes.getActiveScene();
+			return scene.tracks.main.elements.reduce((acc, el) => {
+				const end = mediaTimeToSeconds({ time: el.startTime }) + mediaTimeToSeconds({ time: el.duration });
+				return Math.max(acc, end);
+			}, 0);
+		} catch {
+			return totalDuration;
+		}
+	}, [editor, totalDuration]);
+
 	const applyTransformToElement = useCallback(
 		({ draft, patch }: { draft: Draft; patch: Partial<KlipBrandLayer> }) => {
 			if (!draft.elementId || !draft.trackId) return;
 			const next = { ...draft, ...patch };
-			const posX = (next.x - 0.5) * canvasWidth;
-			const posY = (0.5 - next.y) * canvasHeight;
 			// "Lebar penuh" mengabaikan scale manual: lebar tepat selebar kanvas,
 			// tinggi mengikuti rasio asli. Harus dihitung di sini juga, karena
 			// jalur ini yang menulis ulang params elemen setiap field berubah.
@@ -280,6 +292,11 @@ export function BrandPanel() {
 				next.fit === "full_width" && next.assetWidth != null && next.assetWidth > 0
 					? canvasWidth / next.assetWidth
 					: Math.max(next.scale, 0.01);
+			// Saat lebar penuh, layer setinggi kanvas ke bawah; pusatkan vertikal
+			// agar tidak menggantung dari atas (default y = 0.05).
+			const effY = next.fit === "full_width" && !next.full ? 0.5 : next.y;
+			const posX = (next.x - 0.5) * canvasWidth;
+			const posY = (0.5 - effY) * canvasHeight;
 			const elementPatch: Partial<TimelineElement> = {
 				hidden: !next.enabled,
 				params: {
@@ -295,7 +312,12 @@ export function BrandPanel() {
 				},
 			};
 			if (!next.full) {
-				elementPatch.startTime = mediaTimeFromSeconds({ seconds: next.start });
+				// "Di akhir video": mulai tepat saat video utama habis, berapa pun
+				// durasinya. Tanpa ini toggle hanya tersimpan di DB dan elemen
+				// timeline tetap berada di posisi absolut lama.
+				const startSec =
+					next.anchor === "main_end" ? mainTrackDuration() + next.start : next.start;
+				elementPatch.startTime = mediaTimeFromSeconds({ seconds: Math.max(0, startSec) });
 				elementPatch.duration = mediaTimeFromSeconds({ seconds: next.dur });
 			} else {
 				elementPatch.startTime = mediaTimeFromSeconds({ seconds: 0 });
@@ -305,7 +327,7 @@ export function BrandPanel() {
 				updates: [{ trackId: draft.trackId, elementId: draft.elementId, patch: elementPatch }],
 			});
 		},
-		[canvasHeight, canvasWidth, editor, totalDuration],
+		[canvasHeight, canvasWidth, editor, mainTrackDuration, totalDuration],
 	);
 
 	const handleField = useCallback(
