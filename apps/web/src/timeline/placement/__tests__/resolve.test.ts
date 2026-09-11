@@ -14,7 +14,7 @@ import type {
 } from "@/timeline";
 import type { Transform } from "@/rendering";
 import { resolveTrackPlacement } from "@/timeline/placement";
-import { mediaTime, ZERO_MEDIA_TIME } from "@/wasm";
+import { mediaTime, roundMediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 
 function buildTransform(): Transform {
 	return {
@@ -240,9 +240,12 @@ function buildTimeSpan({
 	duration: number;
 	excludeElementId?: string;
 }) {
+	// roundMediaTime, bukan mediaTime: sebagian tes memakai waktu pecahan
+	// (mis. 2.5) untuk menguji rentang yang tidak sejajar frame. mediaTime
+	// menuntut tick bilangan bulat dan menolaknya dengan benar.
 	return {
-		startTime: mediaTime({ ticks: startTime }),
-		duration: mediaTime({ ticks: duration }),
+		startTime: roundMediaTime({ time: startTime }),
+		duration: roundMediaTime({ time: duration }),
 		excludeElementId,
 	};
 }
