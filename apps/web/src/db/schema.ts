@@ -292,3 +292,100 @@ export const klipSyncMedia = mysqlTable("klip_sync_media", {
 });
 
 export type KlipSyncMedia = typeof klipSyncMedia.$inferSelect;
+
+// ─── Batch: upload ZIP -> template -> render -> publish (Tahap 1) ───────────
+// Lihat docs/klip-batch-publish-plan.md bagian 6.
+// Tahap 1 hanya mencatat niat; worker (Tahap 2) yang mengerjakan.
+
+export const klipBatches = mysqlTable("klip_batches", {
+	id: varchar("id", { length: 64 }).primaryKey(),
+	// Pemilik project batch. Sementara memakai user id pertama (keputusan #6);
+	// saat API-driven ganti ke owner per-request / service account (T1-3).
+	ownerUserId: varchar("owner_user_id", { length: 64 }),
+	// null = pakai default global dari klip_settings (keputusan #3).
+	templateId: varchar("template_id", { length: 64 }),
+	source: mysqlEnum("source", ["upload", "api"]).default("upload").notNull(),
+	zipPath: varchar("zip_path", { length: 1024 }).notNull(),
+	zipBytes: double("zip_bytes"),
+	status: mysqlEnum("status", ["queued", "running", "done", "partial", "failed", "halted"])
+		.default("queued")
+		.notNull(),
+	total: int("total").default(0).notNull(),
+	succeeded: int("succeeded").default(0).notNull(),
+	failed: int("failed").default(0).notNull(),
+	// Alasan batch berhenti karena circuit breaker (N1), bukan error biasa.
+	haltedReason: text("halted_reason"),
+	createdAt: timestamp("created_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+	updatedAt: timestamp("updated_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+});
+
+export type KlipBatch = typeof klipBatches.$inferSelect;
+
+/** Satu baris per video di dalam zip. Tabel ini adalah antriannya. */
+export const klipBatchJobs = mysqlTable("klip_batch_jobs", {
+	id: varchar("id", { length: 64 }).primaryKey(),
+	batchId: varchar("batch_id", { length: 64 })
+		.notNull()
+		.references(() => klipBatches.id, { onDelete: "cascade" }),
+	// Nama entri di dalam zip (sudah lewat sanitizeZipEntryName).
+	entryName: varchar("entry_name", { length: 512 }).notNull(),
+	projectId: varchar("project_id", { length: 64 }).references(
+		() => klipProjects.id,
+		{ onDelete: "set null" },
+	),
+	status: mysqlEnum("status", [
+		"queued",
+		"extracting",
+		"rendering",
+		"rendered",
+		"publishing",
+		"published",
+		"failed",
+		"cancelled",
+	])
+		.default("queued")
+		.notNull(),
+	// Tahap terakhir yang BERHASIL. Dipakai untuk resume idempoten (T2-2).
+	stage: varchar("stage", { length: 32 }),
+	attempts: int("attempts").default(0).notNull(),
+	maxAttempts: int("max_attempts").default(5).notNull(),
+	// Jadwal retry; boleh besok kalau kena rate limit IG (keputusan #2).
+	nextAttemptAt: timestamp("next_attempt_at"),
+	renderedPath: varchar("rendered_path", { length: 1024 }),
+	publishId: varchar("publish_id", { length: 64 }).references(
+		() => klipIgPublishes.id,
+		{ onDelete: "set null" },
+	),
+	error: text("error"),
+	// Klaim job supaya dua worker tidak mengerjakan baris yang sama (T2-3).
+	lockedAt: timestamp("locked_at"),
+	lockedBy: varchar("locked_by", { length: 64 }),
+	createdAt: timestamp("created_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+	updatedAt: timestamp("updated_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+});
+
+export type KlipBatchJob = typeof klipBatchJobs.$inferSelect;
+
+/**
+ * Setting key-value (keputusan bagian 9 #2). Sengaja tanpa tipe: nilai baru
+ * bisa ditambah tanpa migrasi. Konsekuensinya WAJIB divalidasi saat dibaca —
+ * pakai helper di klip/settings.ts, jangan parsing manual tersebar.
+ */
+export const klipSettings = mysqlTable("klip_settings", {
+	key: varchar("key", { length: 64 }).primaryKey(),
+	value: text("value").notNull(),
+	updatedAt: timestamp("updated_at")
+		.$defaultFn(() => new Date())
+		.notNull(),
+});
+
+export type KlipSetting = typeof klipSettings.$inferSelect;
+

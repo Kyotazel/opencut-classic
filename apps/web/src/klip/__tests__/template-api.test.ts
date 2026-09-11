@@ -321,7 +321,10 @@ describe("brand template save-as and apply", () => {
 		}
 		const bgm = Object.fromEntries(Object.entries(bgmRaw));
 		expect(bgm["anchor"]).toBe("main_end");
-		expect(testNum({ rec: bgm, name: "start" })).toBeCloseTo(-3.2, 9);
+		// main_end menyimpan offset 0: anchor itu sendiri yang memindahkan layer
+		// ke ujung video TUJUAN, apa pun durasinya. Offset negatif lama
+		// (-3.2) bergantung durasi project sumber dan meleset di video lain.
+		expect(testNum({ rec: bgm, name: "start" })).toBeCloseTo(0, 9);
 
 		// Apply ke main 50 dtk: BGM nempel 3.2 dtk sebelum ujung main.
 		const dst = await byOpencut(
@@ -354,8 +357,11 @@ describe("brand template save-as and apply", () => {
 			throw new Error("test: layer BGM hasil apply tidak ditemukan");
 		}
 		const outBgm = Object.fromEntries(Object.entries(outBgmRaw));
-		expect(testNum({ rec: outBgm, name: "start" })).toBeCloseTo(46.8, 9);
-		expect(testNum({ rec: out, name: "totalDuration" })).toBeCloseTo(56.33, 9);
+		// Mulai tepat di ujung main 50s, bukan "3.2s sebelum ujung" (46.8).
+		expect(testNum({ rec: outBgm, name: "start" })).toBeCloseTo(50, 9);
+		// 50 (mulai di ujung main) + 9.53 (dur BGM) = 59.53. Angka lama 56.33
+		// ikut bergeser -3.2 karena start yang salah.
+		expect(testNum({ rec: out, name: "totalDuration" })).toBeCloseTo(59.53, 9);
 	});
 
 	test("apply-template resolves and replaces layers", async () => {

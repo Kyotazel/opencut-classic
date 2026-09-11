@@ -50,6 +50,13 @@
       "when": 1789108953810,
       "tag": "0006_busy_starfox",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1789111294225,
+      "tag": "0007_demonic_mysterio",
+      "breakpoints": true
     }
   ]
 }
