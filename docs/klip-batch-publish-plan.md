@@ -787,3 +787,179 @@ yang dipakai - periksa URL-nya dengan `curl -I` sebelum menuduh videonya salah.
   dengan `IG_TOKEN_KEY` di env server; menggantinya membuat token tersimpan
   tidak bisa didekripsi, jadi semua akun harus dihubungkan ulang.
 
+---
+
+## 16. Deploy ke produksi (server `third`)
+
+Diperiksa langsung 14 Sep 2026, **read-only**. Semua angka di bawah hasil
+pengukuran, bukan asumsi.
+
+### 16.1 Keadaan server saat diperiksa
+
+| Hal | Nilai |
+|---|---|
+| Host | `third.worker`, Ubuntu 24.04.4, kernel 6.8.0-124 |
+| Disk | 296 GB, **42 GB tersisa (86% terpakai)** |
+| Memori | 15 GB total, 9,4 GB tersedia |
+| Repo | `/var/www/html/klip-opencut`, branch **`main`** @ `576c6104` |
+| `clip-opencut` | pm2 id 14, **online**, up 2 hari, port `127.0.0.1:6050` |
+| `klip-worker` | **BELUM ADA** |
+| pm2 lain | 13 aplikasi lain (n8n, xm-worker, third-worker, openshorts, ...) |
+| `bun` | `/root/.bun/bin/bun` - TIDAK ada di PATH shell non-interaktif |
+| `node` | nvm v22.22.3 / v24.16.0 / v26.3.0 |
+| `pm2` | `/root/.nvm/versions/node/v22.22.3/bin/pm2` (7.0.4) |
+| ffmpeg / ffprobe | ADA (6.1.1) |
+| Chromium Playwright | **BELUM ADA** (`~/.cache/ms-playwright` kosong) |
+| nginx vhost | `/etc/nginx/sites-enabled/opencut.ordoagentic.ai` - **sudah benar** |
+| Data root | `/var/lib/klip/data` (328 MB) |
+
+**nginx tidak perlu diubah.** Vhost-nya sudah punya `client_max_body_size 500m`,
+`proxy_request_buffering off`, timeout 600s, dan HTTPS Certbot. 13 vhost lain
+di direktori yang sama **jangan disentuh**.
+
+**`KLIP_PUBLIC_BASE_URL` sudah terpasang** di `apps/web/.env.production` dengan
+nilai `https://opencut.ordoagentic.ai` - sudah benar, jangan diubah.
+
+### 16.2 Data yang sudah ada di server
+
+Tidak perlu memindahkan data dari lokal. Server sudah punya sendiri:
+
+| Tabel | Jumlah |
+|---|---|
+| `klip_projects` | 3 |
+| `klip_brand_templates` | 1 (`btpl_7d6a2bbe26d3` "template 1") |
+| `klip_media` | 13 |
+| `klip_ig_accounts` | 1 (`ig_4374b01df0ec` motivasikaya26, **active**) |
+| `klip_ig_publishes` | 2 |
+
+Akun IG di server punya id BERBEDA dari lokal (`ig_4374b01df0ec` vs
+`ig_b1b8d008b879`) - itu wajar, keduanya koneksi terpisah dengan
+`IG_TOKEN_KEY` masing-masing. **Jangan menyalin database lokal ke server**;
+tidak ada yang perlu dipindah.
+
+Yang BELUM ada: `klip_batches`, `klip_batch_jobs`, `klip_settings`.
+Ledger `drizzle_migrations` baru sampai migrasi **0004**.
+
+### 16.3 Dua jebakan yang bisa menggagalkan deploy
+
+**1. `ecosystem.config.cjs` di server UNTRACKED.** Git akan menolak checkout:
+
+```
+error: The following untracked working tree files would be overwritten by checkout:
+        ecosystem.config.cjs
+```
+
+Berkas itu HARUS dipindahkan dulu. Versi yang sekarang dilacak git sudah lebih
+benar (membaca `apps/web/.env.production` + menjalankan worker), jadi versi
+lama cukup di-rename sebagai cadangan.
+
+**2. `.env.production` ada di `apps/web/`, bukan root repo.** Versi lama
+`ecosystem.config.cjs` membaca root - karena itu berkas yang dilacak git
+diperbaiki dulu (commit `9e366bef`). Kalau memakai versi lama, env akan kosong
+dan aplikasi start tanpa `DATABASE_URL`.
+
+### 16.4 Langkah deploy
+
+**Di mesin lokal:**
+
+```bash
+git push -u origin automate
+```
+
+**Di server - siapkan PATH dulu** (bun dan pm2 tidak ada di PATH default):
+
+```bash
+export PATH="/root/.bun/bin:/root/.nvm/versions/node/v22.22.3/bin:$PATH"
+bun --version && pm2 -v        # pastikan keduanya kebaca
+```
+
+**1. Cadangkan dulu.**
+
+```bash
+cd /var/www/html/klip-opencut
+mysqldump -u root klip > ~/klip-backup-$(date +%F-%H%M).sql
+ls -lh ~/klip-backup-*.sql
+mv ecosystem.config.cjs ecosystem.config.cjs.lama-$(date +%F)
+```
+
+**2. Ambil kode baru.**
+
+```bash
+git fetch origin
+git checkout automate
+git log --oneline -1        # harus menampilkan commit terbaru dari automate
+```
+
+**3. Pasang dependensi.**
+
+```bash
+cd apps/web
+bun install
+```
+
+**4. Jalankan migrasi** (0005-0009; semuanya aditif - tambah kolom/tabel,
+tidak ada yang dihapus).
+
+```bash
+NODE_ENV=production node ./node_modules/drizzle-kit/bin.cjs migrate
+mysql -N -e "SELECT id FROM klip.drizzle_migrations ORDER BY id;"   # harus sampai 10
+mysql -N -e "USE klip; SHOW TABLES LIKE 'klip_batch%'; SHOW TABLES LIKE 'klip_settings';"
+```
+
+**5. Pasang Chromium untuk worker** (sekitar 400 MB, disk masih 42 GB).
+
+```bash
+bunx playwright install --with-deps chromium
+```
+
+**6. Build.**
+
+```bash
+bun run build
+```
+
+**7. GOTCHA standalone: `.next/static` tidak ikut tersalin.** Tanpa langkah ini
+halaman tampil tanpa CSS/JS.
+
+```bash
+cp -r .next/static .next/standalone/apps/web/.next/static
+```
+
+**8. Jalankan.**
+
+```bash
+cd /var/www/html/klip-opencut
+pm2 startOrReload ecosystem.config.cjs
+pm2 save
+pm2 list | grep -E "clip-opencut|klip-worker"
+```
+
+**9. Setelan batch.** Tanpa ini publish akan dilewati (`no_ig_account`) dan
+template default kosong.
+
+```bash
+cd apps/web
+NODE_ENV=production bun run klip:setting template btpl_7d6a2bbe26d3
+NODE_ENV=production bun run klip:setting ig-account ig_4374b01df0ec
+NODE_ENV=production bun run klip:setting
+```
+
+### 16.5 Verifikasi
+
+```bash
+curl -sI https://opencut.ordoagentic.ai | head -3
+pm2 logs klip-worker --lines 40
+```
+
+Lalu antrikan **SATU video** dari UI produksi dan pastikan sampai
+`status = published` di `/batches`.
+
+### 16.6 Yang perlu dijaga
+
+- **Disk 86%.** Build 2,9 GB. `df -h /` sebelum dan sesudah.
+- **`xm-worker` sudah 100% CPU** dan `third-worker` memakai 2,5 GB. Render
+  Chromium 1080p menambah beban; jangan mengerjakan banyak video bersamaan
+  sampai terlihat dampaknya ke aplikasi lain.
+- **13 vhost nginx lain** - jangan sentuh direktori `sites-enabled`.
+- **13 aplikasi pm2 lain** - jangan pakai `pm2 delete all` atau `pm2 restart all`.
+
