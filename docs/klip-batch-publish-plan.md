@@ -1,6 +1,6 @@
 # Klip x OpenCut - Batch ZIP -> Template -> Auto-Publish Instagram
 
-**Status:** Tahap 1 SELESAI (belum di-deploy) - commit `05a1c6fd`  
+**Status:** Tahap 1 & 2 SELESAI (lokal, belum di-deploy)  
 **Repo:** Klip x OpenCut (fork), produksi `https://opencut.ordoagentic.ai`
 
 ---
@@ -431,20 +431,81 @@ Kalau jumlahnya bertambah setelah migrate, ledger masih salah.
 
 ---
 
-## 12. Langkah berikutnya
+## 12. Status Tahap 2 - SELESAI (berbasis Chromium)
 
-**Tahap 1 selesai** (commit `05a1c6fd`, dokumen `98932578`). Berikutnya **Tahap 2**:
-worker yang mengekstrak ZIP, membuat project per video, dan menempelkan template.
+**Keputusan besar:** worker **TIDAK** meniru logika editor di Node, melainkan
+menjalankan **Chromium headless** - lingkungan asli kode editor.
 
-**Masih belum render** - render adalah Tahap 3 dan paling rapuh (lihat bagian 4).
+Alur: `ambil job` -> `ekstrak ZIP` (Node) -> `Chromium buka /internal/batch-job`
+-> halaman membuat project memakai kode editor yang sama dengan UI -> `worker`
+menautkan project + menempelkan template -> `tandai rendered`.
 
-Yang perlu diputuskan saat Tahap 2 dimulai (bagian 9 nomor 3-5):
+### Kenapa Chromium, bukan Node
 
-- Lokasi kode worker: `apps/worker` (app baru) atau `apps/web/scripts/`
-- Cara worker jalan: `pm2` (konsisten dengan app) atau `systemd`
-- Tampilan project batch di UI: semua user lihat, atau hanya owner
+Tiga percobaan memaksa `opencut-wasm` jalan di Node semuanya gagal:
 
-### Deploy Tahap 1 ke server
+| Percobaan | Akibat |
+|---|---|
+| Lapisan waktu murni | Nilai salah (`1000`, seharusnya `120000`) - durasi jadi 120x salah |
+| Jembatan binding runtime | SSR rusak, build gagal |
+| Revert | Worker hilang |
+
+Chromium menghapus **seluruh** masalah itu: tidak ada wasm yang perlu diakali,
+tidak ada `scenes.ts`/`params` yang perlu ditiru, dan tidak ada dua sumber
+kebenaran. `media-time.ts` tidak perlu disentuh sama sekali.
+
+### Hasil uji dengan data nyata
+
+Batch `b_88e7c1394b2d` (6 video, ZIP 118 MB):
+
+| Job | Durasi (ffprobe) |
+|---|---|
+| clip_01 | 42,5 dtk |
+| clip_02 | 46,1 dtk |
+| clip_03 | 30,1 dtk |
+| clip_04 | 37,7 dtk |
+| clip_05 | 26,5 dtk |
+| clip_06 | 24,9 dtk |
+
+**6/6 job `rendered`, batch `done`.** Editor membuka project hasil worker:
+HTTP 200, 0 error, durasi tampil benar.
+
+### Cara tes manual
+
+```bash
+# 1. Pastikan dev server jalan (bun run dev:web)
+# 2. Antrikan ZIP dari /projects -> tombol "Antrikan batch"
+# 3. Jalankan worker satu kali
+cd apps/web && bun run worker:once
+# 4. Lihat hasilnya di /batches dan /projects
+```
+
+Worker butuh env: `APP_USER`, `APP_PASSWORD`, dan `KLIP_WORKER_BASE_URL`
+(default `http://127.0.0.1:6050`). Untuk dev lokal set ke `http://127.0.0.1:3000`.
+
+### Yang belum
+
+- **Template belum teruji dengan template nyata** - kodenya ada, tapi batch uji
+  belum punya template aktif.
+- **Render MP4** - belum ada (Tahap 3).
+- **Publish IG** - belum ada (Tahap 4).
+- **Window waktu (jam 11-15)** - belum ada (Tahap 3).
+- **pm2 di server** - config sudah ada (`ecosystem.config.cjs`), belum dipasang.
+
+---
+
+## 13. Langkah berikutnya
+
+**Tahap 3: render MP4.** Ini yang paling rapuh (lihat bagian 4) - perlu dijawab:
+
+- Apakah render di Chromium jalan tanpa GPU?
+- Berapa lama 1 video?
+- Apakah hasilnya identik dengan yang terlihat di browser?
+
+Karena worker sudah memakai Chromium, **infrastruktur Tahap 3 sudah ada**.
+Yang kurang hanya memicu render dari halaman internal dan menyimpan MP4-nya.
+
+### Deploy ke server
 
 ```bash
 cd /var/www/html/klip-opencut
@@ -456,11 +517,5 @@ NODE_ENV=production node ./node_modules/drizzle-kit/bin.cjs migrate
 mysql -u klip -p klip -N -e "SHOW TABLES LIKE 'klip_batch%'; SHOW TABLES LIKE 'klip_settings';"
 ```
 
-Endpoint baru: `POST /api/klip/batches` (butuh sesi login; mengembalikan `202 + batch_id`).
-Belum ada UI - sengaja, karena Tahap 1 hanya membuktikan kerangkanya.
-
-### Utang di luar proyek ini
-
-- **N2** Redis belum jalan - menunda `/api/feedback` dan `/api/sounds/search`.
-- **N5** Rotasi `BETTER_AUTH_SECRET`, password MySQL, dan `APP_PASSWORD`.
-- **N4** Disk `third` ~85% - wajib dicek sebelum Tahap 3 (Chromium ~400 MB).
+Server juga perlu Chromium: `bunx playwright install chromium` (+ sekitar 400 MB;
+cek disk dulu - bagian 4).
