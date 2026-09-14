@@ -34,9 +34,17 @@ function baseName({ filename }: { filename: string }): string {
 export async function createProjectFromServerVideo({
 	item,
 	fetchFile,
+	projectId: presetProjectId,
 }: {
 	item: BatchProjectItem;
 	fetchFile: (url: string) => Promise<File>;
+	/**
+	 * Id project yang ditentukan pemanggil. Worker memerlukannya supaya bisa
+	 * menautkan baris klip_projects ke job SEBELUM halaman ini selesai - kalau
+	 * id dibuat acak di sini, worker tidak punya cara mencocokkannya.
+	 * Kosong = perilaku lama (id acak), dipakai jalur "Upload zip" di UI.
+	 */
+	projectId?: string;
 }): Promise<string> {
 	const file = await fetchFile(item.url);
 	const [processed] = await processMediaAssets({
@@ -80,7 +88,7 @@ export async function createProjectFromServerVideo({
 		scene.tracks.main.elements.push(element);
 	}
 
-	const projectId = generateUUID();
+	const projectId = presetProjectId ?? generateUUID();
 	const project: TProject = {
 		metadata: {
 			id: projectId,

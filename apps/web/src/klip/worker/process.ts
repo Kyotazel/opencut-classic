@@ -1,20 +1,13 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { and, asc, eq, isNull, lte, or } from "drizzle-orm";
-import {
-	db,
-	klipBatchJobs,
-	klipBatches,
-	klipProjects,
-	klipSyncMedia,
-	klipSyncProjects,
-} from "@/db";
+import { db, klipBatchJobs, klipBatches, klipProjects } from "@/db";
+import { resolveBatchTemplateId } from "@/klip/batch-service";
 import { resolveOrCreateProject } from "@/klip/brand";
-import { extractVideosFromZip } from "@/klip/worker/extract";
-import { buildProjectFromVideo, serializeProjectForServer } from "@/klip/worker/project-builder";
 import { applyTemplate } from "@/klip/templates";
 import { dataRoot } from "@/klip/upload";
-import { resolveBatchTemplateId } from "@/klip/batch-service";
+import { ChromiumRunner } from "@/klip/worker/chromium";
+import { extractVideosFromZip } from "@/klip/worker/extract";
 
 export const WORKER_ID = `worker-${randomUUID().slice(0, 8)}`;
 
@@ -30,11 +23,10 @@ export type ClaimedJob = {
  * Klaim satu job secara atomik.
  *
  * Redis belum jalan, jadi dipakai transaksi MySQL dengan SELECT ... FOR UPDATE:
- * dua worker yang berjalan bersamaan tidak boleh mengambil baris yang sama
- * (T2-3). Job dengan next_attempt_at di masa depan dilewati sampai waktunya.
+ * dua worker yang bersamaan tidak boleh mengambil baris yang sama (T2-3).
+ * Job dengan next_attempt_at di masa depan dilewati sampai waktunya.
  *
- * `batchId` hanya dipakai tes untuk mengunci pencarian ke batch miliknya;
- * worker sungguhan memanggilnya tanpa argumen agar mengambil job mana pun.
+ * `batchId` hanya dipakai tes untuk mengunci pencarian ke batch miliknya.
  */
 export async function claimNextJob({
 	batchId,
@@ -92,14 +84,22 @@ async function setJob({
  * Hitung ulang counter batch dari baris job. Selalu dihitung, tidak
  * di-increment, supaya angka tetap benar walau worker mati di tengah jalan.
  */
-export async function refreshBatchCounters({ batchId }: { batchId: string }): Promise<void> {
+export async function refreshBatchCounters({
+	batchId,
+}: {
+	batchId: string;
+}): Promise<void> {
 	const rows = await db
 		.select({ status: klipBatchJobs.status })
 		.from(klipBatchJobs)
 		.where(eq(klipBatchJobs.batchId, batchId));
 	const total = rows.length;
-	const done = rows.filter((r) => r.status === "rendered" || r.status === "published").length;
-	const failed = rows.filter((r) => r.status === "failed" || r.status === "cancelled").length;
+	const done = rows.filter(
+		(r) => r.status === "rendered" || r.status === "published",
+	).length;
+	const failed = rows.filter(
+		(r) => r.status === "failed" || r.status === "cancelled",
+	).length;
 	const allSettled = rows.every((r) =>
 		["rendered", "published", "failed", "cancelled"].includes(r.status),
 	);
@@ -116,104 +116,55 @@ export async function refreshBatchCounters({ batchId }: { batchId: string }): Pr
 }
 
 /**
- * Daftarkan berkas video sebagai media project di klip_sync_media.
+ * URL video hasil ekstraksi untuk dikonsumsi Chromium.
  *
- * Idempoten: menjalankan ulang job yang sama tidak boleh membuat baris ganda,
- * karena id-nya deterministik dari nama entri.
+ * Chromium tidak bisa membaca disk langsung; halaman internal mengambil berkas
+ * lewat endpoint ini. Path di endpoint itu disusun dari batchId + entri yang
+ * terdaftar di database, jadi tidak ada celah traversal.
  */
-export function newMediaAssetId(): string {
-	return `m_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
-}
-
-async function registerSyncMedia({
-	assetId,
-	projectId,
-	relPath,
+export function videoUrlFor({
+	baseUrl,
+	batchId,
 	entryName,
 }: {
-	assetId: string;
-	projectId: string;
-	relPath: string;
+	baseUrl: string;
+	batchId: string;
 	entryName: string;
-}): Promise<void> {
-	const mime = mimeForName({ name: entryName });
-	// Idempoten: menjalankan ulang job yang sama tidak boleh menggandakan baris.
-	const existing = await db
-		.select({ id: klipSyncMedia.id })
-		.from(klipSyncMedia)
-		.where(and(eq(klipSyncMedia.id, assetId), eq(klipSyncMedia.projectId, projectId)))
-		.limit(1);
-	if (existing[0]) return;
-	await db.insert(klipSyncMedia).values({
-		id: assetId,
-		projectId,
-		filePath: relPath,
-		mime,
-		size: 0,
-	});
-}
-
-function mimeForName({ name }: { name: string }): string {
-	const ext = path.extname(name).toLowerCase();
-	if (ext === ".mov") return "video/quicktime";
-	if (ext === ".webm") return "video/webm";
-	return "video/mp4";
-}
-
-/**
- * Simpan project ke klip_sync_projects supaya bisa dibuka di editor, lalu buat
- * baris klip_projects yang menautkannya (jalur yang sama dengan by-opencut).
- */
-async function persistProject({
-	opencutRef,
-	name,
-	data,
-}: {
-	opencutRef: string;
-	name: string;
-	data: string;
-}): Promise<string> {
-	const existing = await db
-		.select({ id: klipSyncProjects.id })
-		.from(klipSyncProjects)
-		.where(eq(klipSyncProjects.id, opencutRef))
-		.limit(1);
-	if (existing[0]) {
-		await db
-			.update(klipSyncProjects)
-			.set({ name: name.slice(0, 255), data, updatedAt: new Date() })
-			.where(eq(klipSyncProjects.id, opencutRef));
-	} else {
-		await db
-			.insert(klipSyncProjects)
-			.values({ id: opencutRef, name: name.slice(0, 255), data });
-	}
-	const project = await resolveOrCreateProject({ opencutRef, name });
-	return project.id;
+}): string {
+	const base = baseUrl.replace(/\/$/, "");
+	const query = new URLSearchParams({ entry: entryName });
+	return `${base}/api/klip/batches/${encodeURIComponent(batchId)}/video?${query.toString()}`;
 }
 
 export type ProcessResult =
 	| { kind: "rendered"; projectId: string; video: string }
 	| { kind: "skipped"; reason: string }
-	| { kind: "failed"; error: string; willRetry: boolean };
+	| { kind: "failed"; error: string };
 
 /**
- * Kerjakan satu job: ekstrak ZIP batch (sekali per batch), ambil video yang
- * cocok dengan entryName, bangun project, simpan, lalu tempelkan template.
+ * Kerjakan satu job: ekstrak ZIP, lalu suruh Chromium membuat project dan
+ * menempelkan template memakai kode editor yang sama dengan UI.
  */
-export async function processJob({ job }: { job: ClaimedJob }): Promise<ProcessResult> {
+export async function processJob({
+	job,
+	runner,
+	baseUrl,
+}: {
+	job: ClaimedJob;
+	runner: ChromiumRunner;
+	baseUrl: string;
+}): Promise<ProcessResult> {
 	const batches = await db
 		.select()
 		.from(klipBatches)
 		.where(eq(klipBatches.id, job.batchId))
 		.limit(1);
 	const batch = batches[0];
-	if (!batch) return { kind: "failed", error: "batch not found", willRetry: false };
+	if (!batch) return { kind: "failed", error: "batch not found" };
 
 	await setJob({ id: job.id, values: { status: "extracting" } });
-	const zipAbsPath = path.join(dataRoot(), batch.zipPath);
 	const { videos, skipped } = await extractVideosFromZip({
-		zipAbsPath,
+		zipAbsPath: path.join(dataRoot(), batch.zipPath),
 		batchId: job.batchId,
 	});
 	const video = videos.find((v) => v.entryName === job.entryName);
@@ -234,52 +185,48 @@ export async function processJob({ job }: { job: ClaimedJob }): Promise<ProcessR
 
 	await setJob({ id: job.id, values: { status: "rendering", stage: "extracted" } });
 
+	// Id project ditentukan di sini supaya worker bisa menautkannya ke job.
 	const opencutRef = randomUUID();
-	// mediaId harus diketahui saat project dibangun, jadi id-nya dibuat lebih
-	// dulu. Baris klip_sync_media baru bisa ditulis SETELAH klip_sync_projects
-	// ada, karena foreign key-nya ke sana.
-	const mediaAssetId = newMediaAssetId();
-	const project = buildProjectFromVideo({
-		video: {
-			name: video.entryName,
-			absPath: video.absPath,
+	const projectId = await runner.renderProject({
+		input: {
+			opencutRef,
+			videoUrl: videoUrlFor({ baseUrl, batchId: job.batchId, entryName: job.entryName }),
+			entryName: job.entryName,
+		},
+	});
+
+	// Halaman internal sudah menyimpan project + medianya ke klip_sync_projects.
+	// Baris klip_projects BELUM ada, dan klip_batch_jobs.project_id mengacu ke
+	// sana - jadi harus dibuat lebih dulu, kalau tidak update di bawah gagal
+	// dengan foreign key.
+	const project = await resolveOrCreateProject({
+		opencutRef,
+		name: video.entryName,
+	});
+	await db
+		.update(klipProjects)
+		.set({
+			batchId: job.batchId,
+			duration: video.duration,
 			width: video.width,
 			height: video.height,
-			duration: video.duration,
-		},
-		projectId: opencutRef,
-		mediaAssetId,
-	});
-	const projectId = await persistProject({
-		opencutRef,
-		name: project.metadata.name,
-		data: serializeProjectForServer({ project }),
-	});
-	// Baru sekarang project-nya ada, jadi media boleh didaftarkan.
-	await registerSyncMedia({
-		assetId: mediaAssetId,
-		projectId: opencutRef,
-		relPath: video.relPath,
-		entryName: video.entryName,
-	});
+		})
+		.where(eq(klipProjects.id, project.id));
+	await setJob({ id: job.id, values: { projectId: project.id, stage: "project_created" } });
 
-	await setJob({ id: job.id, values: { projectId, stage: "project_created" } });
-
-	// Tempelkan template. mainDuration diambil dari durasi video supaya layer
-		// anchor "di akhir video" mendarat tepat di ujung.
+	// Tempelkan template. mainDuration dari durasi video supaya layer anchor
+	// "di akhir video" mendarat tepat di ujung.
 	const templateId = await resolveBatchTemplateId({
 		explicitTemplateId: batch.templateId,
 	});
 	if (templateId) {
 		try {
 			const applied = await applyTemplate({
-				projectId,
+				projectId: project.id,
 				templateId,
 				mainDuration: video.duration,
 			});
-			if (applied.status !== 200) {
-				throw new Error(applied.error);
-			}
+			if (applied.status !== 200) throw new Error(applied.error);
 			await setJob({ id: job.id, values: { stage: "template_applied" } });
 		} catch (error) {
 			// Project sudah jadi; template gagal jangan membuang hasilnya.
@@ -299,5 +246,5 @@ export async function processJob({ job }: { job: ClaimedJob }): Promise<ProcessR
 			error: null,
 		},
 	});
-	return { kind: "rendered", projectId, video: video.entryName };
+	return { kind: "rendered", projectId: project.id, video: video.entryName };
 }
