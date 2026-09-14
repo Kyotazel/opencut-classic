@@ -724,6 +724,8 @@ interface ServerProjectMeta {
 	id: string;
 	name: string;
 	updatedAt: string;
+	/** Id job yang punya berkas MP4 hasil render, kalau sudah dirender. */
+	renderJobId: string | null;
 }
 
 function ServerProjectsSection({ localIds }: { localIds: string[] }) {
@@ -757,6 +759,8 @@ function ServerProjectsSection({ localIds }: { localIds: string[] }) {
 								id: r["id"],
 								name: r["name"],
 								updatedAt: typeof r["updatedAt"] === "string" ? r["updatedAt"] : "",
+								renderJobId:
+									typeof r["renderJobId"] === "string" ? r["renderJobId"] : null,
 							},
 						];
 					}),
@@ -846,6 +850,15 @@ function ServerProjectsSection({ localIds }: { localIds: string[] }) {
 								Hanya ada di server — klik Buka untuk menarik ke browser ini
 							</p>
 						</div>
+						{s.renderJobId && (
+							<a
+								href={`/api/klip/batch-jobs/${encodeURIComponent(s.renderJobId)}/video`}
+								download
+								className="text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+							>
+								Unduh MP4
+							</a>
+						)}
 						<Button
 							size="sm"
 							variant="outline"
