@@ -17,7 +17,8 @@
     "db:push:local": "cross-env NODE_ENV=development drizzle-kit push",
     "db:push:prod": "cross-env NODE_ENV=production drizzle-kit push",
     "worker": "bun run worker.ts",
-    "worker:once": "bun run worker.ts --once"
+    "worker:once": "bun run worker.ts --once",
+    "worker:drain": "bun run worker.ts --drain"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",

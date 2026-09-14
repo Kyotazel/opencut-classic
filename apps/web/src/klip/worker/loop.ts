@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, klipBatchJobs } from "@/db";
 import { ChromiumRunner } from "@/klip/worker/chromium";
 import {
@@ -38,7 +38,16 @@ export function nextRetryAt({
 
 export type WorkerOptions = {
 	signal?: AbortSignal;
+	/** Kerjakan SATU job lalu berhenti. Dipakai untuk mencoba satu langkah. */
 	once?: boolean;
+	/**
+	 * Kerjakan semua job yang SIAP, lalu berhenti.
+	 *
+	 * Job yang dijadwalkan ulang (next_attempt_at di masa depan, mis. karena
+	 * kena rate limit) TIDAK ditunggu - kalau ditunggu, perintah ini bisa
+	 * menggantung berjam-jam. Jalankan lagi nanti untuk memprosesnya.
+	 */
+	drain?: boolean;
 	log?: (message: string, extra?: unknown) => void;
 	/** Batasi ke satu batch; kosong = job mana pun. Dipakai tes. */
 	batchId?: string;
@@ -85,6 +94,24 @@ async function handleFailure({
 	);
 }
 
+
+/**
+ * Job yang masih menunggu jadwal retry (next_attempt_at di masa depan).
+ * Dipakai hanya untuk memberi tahu user; bukan penghalang.
+ */
+async function countScheduledJobs({ batchId }: { batchId?: string }): Promise<number> {
+	const rows = await db
+		.select({ id: klipBatchJobs.id })
+		.from(klipBatchJobs)
+		.where(
+			and(
+				eq(klipBatchJobs.status, "queued"),
+				batchId ? eq(klipBatchJobs.batchId, batchId) : undefined,
+			),
+		);
+	return rows.length;
+}
+
 function sleep({ ms, signal }: { ms: number; signal?: AbortSignal }): Promise<void> {
 	return new Promise((resolve) => {
 		const timer = setTimeout(resolve, ms);
@@ -106,6 +133,7 @@ function sleep({ ms, signal }: { ms: number; signal?: AbortSignal }): Promise<vo
 export async function runWorker({
 	signal,
 	once,
+	drain,
 	log,
 	batchId,
 	baseUrl,
@@ -121,7 +149,9 @@ export async function runWorker({
 		while (!signal?.aborted) {
 			const job = await claimNextJob({ batchId });
 			if (!job) {
-				if (once) break;
+				// once = satu job; drain = habiskan yang siap; selain itu tunggu
+				// job baru terus-menerus.
+				if (once || drain) break;
 				await sleep({ ms: IDLE_POLL_MS, signal });
 				continue;
 			}
@@ -149,6 +179,12 @@ export async function runWorker({
 		}
 	} finally {
 		await runner.close();
+	}
+	if (drain) {
+		const pending = await countScheduledJobs({ batchId });
+		if (pending > 0) {
+			say(`${pending} job masih terjadwal (retry), jalankan lagi nanti`);
+		}
 	}
 	say(`worker berhenti (${processed} job)`);
 }

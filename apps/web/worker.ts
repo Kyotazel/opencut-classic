@@ -36,12 +36,21 @@ async function main() {
 		process.env.KLIP_WORKER_BASE_URL?.trim() || "http://127.0.0.1:6050";
 	const username = requireEnv({ name: "APP_USER" });
 	const password = requireEnv({ name: "APP_PASSWORD" });
+	// Tiga mode:
+	//   --once   satu job, lalu berhenti
+	//   --drain  kerjakan semua yang siap, lalu berhenti
+	//   (tanpa flag) loop terus, menunggu job baru
 	const once = process.argv.includes("--once");
+	const drain = process.argv.includes("--drain");
+	if (once && drain) {
+		throw new Error("pilih salah satu: --once atau --drain");
+	}
 
 	const { runWorker } = await import("@/klip/worker/loop");
 	await runWorker({
 		signal: controller.signal,
 		once,
+		drain,
 		baseUrl,
 		username,
 		password,

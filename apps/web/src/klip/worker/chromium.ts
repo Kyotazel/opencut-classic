@@ -40,6 +40,7 @@ export class ChromiumRunner {
 	private readonly baseUrl: string;
 	private readonly username: string;
 	private readonly password: string;
+	private context: BrowserContext | null = null;
 
 	constructor({
 		baseUrl,
@@ -62,12 +63,25 @@ export class ChromiumRunner {
 	}
 
 	async close(): Promise<void> {
+		await this.context?.close().catch(() => {});
+		this.context = null;
 		await this.browser?.close().catch(() => {});
 		this.browser = null;
 	}
 
-	/** Context baru yang sudah login; cookie ditanam lewat API, bukan form. */
-	private async newSession(): Promise<BrowserContext> {
+	/**
+	 * Satu context yang sudah login, dipakai ulang untuk SEMUA job.
+	 *
+	 * KENAPA TIDAK LOGIN PER JOB
+	 * /api/auth/login dibatasi 10 percobaan per menit per IP. Kalau tiap job
+	 * membuat sesi baru, batch ke-11 selalu gagal dengan HTTP 429 - dan itu
+	 * terjadi walaupun pemrosesan berjalan normal.
+	 *
+	 * Aman dipakai bersama karena job diproses SERIAL (bukan paralel) dan tiap
+	 * project punya id unik, sehingga kunci penyimpanan browser tidak bentrok.
+	 */
+	private async ensureSession(): Promise<BrowserContext> {
+		if (this.context) return this.context;
 		const browser = await this.ensureBrowser();
 		const context = await browser.newContext();
 		const res = await context.request.post(`${this.baseUrl}/api/auth/login`, {
@@ -77,6 +91,7 @@ export class ChromiumRunner {
 			await context.close();
 			throw new Error(`login worker gagal: HTTP ${res.status()}`);
 		}
+		this.context = context;
 		return context;
 	}
 
@@ -91,9 +106,9 @@ export class ChromiumRunner {
 		input: RenderProjectInput;
 		timeoutMs?: number;
 	}): Promise<string> {
-		const context = await this.newSession();
+		const context = await this.ensureSession();
+		const page = await context.newPage();
 		try {
-			const page = await context.newPage();
 			const query = new URLSearchParams({
 				ref: input.opencutRef,
 				video: input.videoUrl,
@@ -113,7 +128,9 @@ export class ChromiumRunner {
 			if (!result.ok) throw new Error(result.error);
 			return result.projectId;
 		} finally {
-			await context.close().catch(() => {});
+			// Halaman ditutup per job, tetapi CONTEXT-nya tidak: sesi login dipakai
+			// ulang supaya tidak menabrak batas 10 login/menit.
+			await page.close().catch(() => {});
 		}
 	}
 }

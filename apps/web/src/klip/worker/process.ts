@@ -17,6 +17,8 @@ export type ClaimedJob = {
 	entryName: string;
 	attempts: number;
 	maxAttempts: number;
+	/** Terisi kalau job ini pernah sampai tahap pembuatan project. */
+	projectId: string | null;
 };
 
 /**
@@ -63,6 +65,7 @@ export async function claimNextJob({
 			entryName: job.entryName,
 			attempts: job.attempts,
 			maxAttempts: job.maxAttempts,
+			projectId: job.projectId,
 		};
 	});
 }
@@ -136,6 +139,22 @@ export function videoUrlFor({
 	return `${base}/api/klip/batches/${encodeURIComponent(batchId)}/video?${query.toString()}`;
 }
 
+
+/** opencutRef milik project, atau null kalau project tidak ada / belum dibuat. */
+async function opencutRefForProject({
+	projectId,
+}: {
+	projectId: string | null;
+}): Promise<string | null> {
+	if (!projectId) return null;
+	const rows = await db
+		.select({ opencutRef: klipProjects.opencutRef })
+		.from(klipProjects)
+		.where(eq(klipProjects.id, projectId))
+		.limit(1);
+	return rows[0]?.opencutRef ?? null;
+}
+
 export type ProcessResult =
 	| { kind: "rendered"; projectId: string; video: string }
 	| { kind: "skipped"; reason: string }
@@ -185,8 +204,11 @@ export async function processJob({
 
 	await setJob({ id: job.id, values: { status: "rendering", stage: "extracted" } });
 
-	// Id project ditentukan di sini supaya worker bisa menautkannya ke job.
-	const opencutRef = randomUUID();
+	// IDEMPOTEN (T2-2): kalau job ini pernah sampai membuat project, pakai ulang
+	// opencutRef-nya. Tanpa ini, setiap percobaan ulang membuat project BARU dan
+	// database terisi duplikat untuk video yang sama.
+	const existingRef = await opencutRefForProject({ projectId: job.projectId });
+	const opencutRef = existingRef ?? randomUUID();
 	// Template ditentukan SEBELUM halaman internal dijalankan: halaman itu yang
 	// menulis layer ke database SEKALIGUS menempelkannya ke timeline. Kalau
 	// template ditempel belakangan dari sini, layer hanya tercatat di database
