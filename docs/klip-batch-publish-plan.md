@@ -538,16 +538,42 @@ waktu   : 81 detik
 Frame detik ke-5: video utama + watermark. Frame detik ke-28: post-roll
 tampil lebar penuh. **Template ikut ter-render dengan benar.**
 
-### Yang perlu dibangun
+### Status: SELESAI (kecuali deploy)
 
-1. **Halaman internal menerima perintah render** - panggil
-   `editor.renderer.exportProject()`, hasilnya `ArrayBuffer`.
-2. **Endpoint penyimpanan MP4** - terima buffer dari Chromium, simpan ke disk.
-   Chromium tidak bisa menulis ke disk server, jadi harus lewat HTTP.
-3. **Status job** - tambah tahap `rendering` -> `rendered` sebenarnya (saat ini
-   `rendered` berarti "project siap", belum ada berkas).
-4. **Window waktu (jam 11-15) + tuas "jalankan sekarang"** (T3-5).
-5. **Batasi 1 render bersamaan** (T3-4) - sudah serial, tinggal dipastikan.
+| # | Item | Status |
+|---|---|---|
+| 1 | Halaman internal menerima perintah render | OK |
+| 2 | Endpoint penyimpanan MP4 | OK |
+| 3 | Status job (`rendered` = MP4 ada) | OK |
+| 4 | **Window waktu + tuas "jalankan sekarang"** (T3-5) | OK |
+| 5 | Batasi 1 render bersamaan (T3-4) | OK (loop serial) |
+| 6 | Tombol unduh MP4 | OK (di `/batches` dan `/projects`) |
+
+### Cara pakai window waktu
+
+Default: **window mati** - worker mengerjakan setiap job yang masuk. Ini yang
+membuat upload langsung diproses tanpa setelan apa pun.
+
+```bash
+cd apps/web
+bun run klip:setting                      # lihat setelan
+bun run klip:setting window 11:00 15:00   # aktifkan window
+bun run klip:setting window off           # matikan lagi
+bun run klip:setting allow-manual on|off  # izinkan --now
+```
+
+Di luar window, worker **menunggu** - job tidak hilang, hanya ditunda:
+
+```
+[worker] di luar window render, menunggu 1010 menit lagi (jam 3:00-3:05)
+```
+
+Tuas "jalankan sekarang" menembus window: `bun run worker:now`. Ditolak dengan
+pesan jelas kalau `allow_manual_run` mati - bukan diam-diam diabaikan.
+
+**Catatan penting:** kolom `klip_settings.updated_at` TIDAK punya nilai default
+di database (drizzle mengisinya dari aplikasi). INSERT lewat SQL mentah gagal
+dengan `Field 'updated_at' doesn't have a default value` - pakai `klip:setting`.
 
 ### Perkiraan kapasitas
 
