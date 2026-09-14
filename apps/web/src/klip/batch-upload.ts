@@ -1,7 +1,21 @@
 import yauzl from "yauzl";
 import { newBatchId, saveVideoBuffer, UploadError } from "@/klip/upload";
 
+/**
+ * Batas aplikasi: sengaja longgar, tapi BUKAN batas sebenarnya di produksi
+ * ber-tunnel.
+ *
+ * Kalau aplikasi diakses lewat Cloudflare Tunnel, Cloudflare memotong request
+ * body di 100 MB dan membalas 413 dengan halaman HTML miliknya - browser tidak
+ * menerima balasan yang bisa dibaca, jadi tombol unggah hanya berputar tanpa
+ * pesan. Sudah diukur: 90 MB lolos, 105 MB ditolak dan baru ~1 MB terkirim.
+ *
+ * Jalan langsung lewat nginx tidak punya batas ini, jadi server produksi
+ * (nginx, tanpa Cloudflare) tetap bisa memakai nilai di bawah.
+ */
 export const MAX_ZIP_BYTES = 2 * 1024 * 1024 * 1024;
+/** Batas nyata lewat Cloudflare Tunnel. Pecah ZIP kalau lebih besar dari ini. */
+export const CLOUDFLARE_MAX_BODY_BYTES = 100 * 1024 * 1024;
 export const MAX_BATCH_FILES = 100;
 /** Batas per file sama dengan upload satuan (lihat route /api/uploads). */
 export const MAX_BATCH_FILE_BYTES = 500 * 1024 * 1024;
