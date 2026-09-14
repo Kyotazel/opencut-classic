@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { EditorCore } from "@/core";
+import {
+	initializeGpuRenderer,
+	isGpuAvailable,
+} from "@/services/renderer/gpu-renderer";
 import { createProjectFromServerVideo } from "@/klip/batch-projects";
 import { materializeBrandLayer } from "@/klip/brand-timeline";
 import { pushProject } from "@/klip/sync";
@@ -43,6 +47,8 @@ export default function BatchJobPage() {
 		const video = params.get("video");
 		const name = params.get("name") ?? "clip.mp4";
 		const templateId = params.get("template");
+		const batchId = params.get("batch");
+		const jobId = params.get("job");
 
 		const fail = (message: string) => {
 			window.__BATCH_JOB_RESULT__ = { ok: false, error: message };
@@ -79,6 +85,12 @@ export default function BatchJobPage() {
 					await applyTemplateToProject({ ref, projectId, name, templateId, setStep: setState });
 				}
 
+				// RENDER: hanya kalau worker meminta (batch + job diketahui).
+				// Tanpa keduanya halaman ini tetap berguna untuk membuat project saja.
+				if (batchId && jobId) {
+					await renderAndUpload({ projectId, batchId, jobId, setStep: setState });
+				}
+
 				window.__BATCH_JOB_RESULT__ = { ok: true, projectId };
 				setState({ kind: "done", projectId });
 			} catch (error) {
@@ -110,6 +122,84 @@ export default function BatchJobPage() {
  * durasi project tidak bertambah, sehingga post-roll tidak ikut ter-render.
  * Langkah 2 memakai kode editor yang sama dengan tombol "Apply template" di UI.
  */
+/**
+ * Render project menjadi MP4 lalu kirim ke server.
+ *
+ * KENAPA DI SINI: render memakai WebCodecs, yang hanya ada di browser.
+ * Chromium sudah menjadi tempat seluruh alur ini berjalan, jadi render terjadi
+ * di halaman yang sama dengan pembuatan project.
+ *
+ * Hasilnya ArrayBuffer (bisa puluhan MB) dan dikirim sebagai body mentah, bukan
+ * multipart, supaya tidak ada penyalinan tambahan.
+ */
+/**
+ * Siapkan editor untuk project ini, sama seperti yang dilakukan editor-provider
+ * saat halaman /editor dibuka.
+ *
+ * URUTAN PENTING: GPU harus diinisialisasi SEBELUM project dimuat. Export
+ * memanggil compositor wasm yang menuntut konteks GPU sudah ada; tanpa ini
+ * render gagal dengan "GPU context not initialized".
+ *
+ * Di lingkungan tanpa GPU (mis. server headless tertentu), initializeGpuRenderer
+ * menandai GPU tidak tersedia dan renderer memakai jalur software - jadi render
+ * tetap berjalan, hanya lebih lambat.
+ */
+async function prepareEditor({
+	editor,
+	projectId,
+}: {
+	editor: EditorCore;
+	projectId: string;
+}): Promise<void> {
+	await initializeGpuRenderer();
+	editor.renderer.setDegraded(!isGpuAvailable());
+	await editor.project.loadProject({ id: projectId });
+}
+
+async function renderAndUpload({
+	projectId,
+	batchId,
+	jobId,
+	setStep,
+}: {
+	projectId: string;
+	batchId: string;
+	jobId: string;
+	setStep: (state: State) => void;
+}): Promise<void> {
+	const editor = EditorCore.getInstance();
+	await prepareEditor({ editor, projectId });
+
+	setStep({ kind: "working", step: "render 0%" });
+	const result = await editor.renderer.exportProject({
+		options: { format: "mp4", quality: "high", includeAudio: true },
+		onProgress: ({ progress }) => {
+			setStep({ kind: "working", step: `render ${Math.round(progress * 100)}%` });
+		},
+	});
+
+	if (!result.success) {
+		throw new Error(result.error ?? "render gagal");
+	}
+	if (!result.buffer) {
+		throw new Error("render tidak menghasilkan berkas");
+	}
+
+	setStep({ kind: "working", step: "mengunggah hasil" });
+	const upload = await fetch(
+		`/api/klip/batches/${encodeURIComponent(batchId)}/rendered?job=${encodeURIComponent(jobId)}`,
+		{
+			method: "POST",
+			headers: { "content-type": "video/mp4" },
+			body: result.buffer,
+		},
+	);
+	if (!upload.ok) {
+		const body = (await upload.json().catch(() => null)) as { error?: string } | null;
+		throw new Error(body?.error ?? `unggah hasil gagal: ${upload.status}`);
+	}
+}
+
 async function applyTemplateToProject({
 	ref,
 	projectId,
@@ -135,7 +225,7 @@ async function applyTemplateToProject({
 
 	// Muat project ke editor supaya timeline-nya bisa disunting.
 	const editor = EditorCore.getInstance();
-	await editor.project.loadProject({ id: projectId });
+	await prepareEditor({ editor, projectId });
 	const project = editor.project.getActiveOrNull();
 	if (!project) throw new Error("project tidak aktif setelah dimuat");
 

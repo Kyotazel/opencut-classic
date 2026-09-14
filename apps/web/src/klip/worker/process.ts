@@ -222,6 +222,10 @@ export async function processJob({
 			videoUrl: videoUrlFor({ baseUrl, batchId: job.batchId, entryName: job.entryName }),
 			entryName: job.entryName,
 			templateId,
+			// batch + job diteruskan supaya halaman internal ikut merender MP4
+			// dan mengunggahnya. Tanpa keduanya, halaman hanya membuat project.
+			batchId: job.batchId,
+			jobId: job.id,
 		},
 	});
 

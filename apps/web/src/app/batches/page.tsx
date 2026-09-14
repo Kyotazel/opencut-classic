@@ -30,15 +30,26 @@ type JobRow = {
 	maxAttempts: number;
 	nextAttemptAt: string | null;
 	error: string | null;
+	/** Terisi setelah render selesai dan berkasnya tersimpan di server. */
+	renderedPath: string | null;
 };
 
 const STATUS_STYLE: Record<string, string> = {
+	// Status batch
 	queued: "bg-muted text-muted-foreground",
 	running: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
 	done: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
 	partial: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
 	failed: "bg-destructive/15 text-destructive",
 	halted: "bg-destructive/15 text-destructive",
+	// Status job - kalau tidak dipetakan, semuanya tampil seperti "queued" dan
+	// sulit dibedakan saat batch sedang berjalan.
+	extracting: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+	rendering: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+	rendered: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+	publishing: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+	published: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+	cancelled: "bg-muted text-muted-foreground",
 };
 
 /**
@@ -96,8 +107,8 @@ export default function BatchesPage() {
 				<div>
 					<h1 className="text-lg font-semibold">Antrian batch</h1>
 					<p className="text-muted-foreground text-sm">
-						ZIP yang sudah masuk antrian. Belum ada worker, jadi job masih
-						menunggu.
+						ZIP yang sudah masuk antrian. Worker memprosesnya satu per satu; setiap
+						video yang selesai dirender punya tautan Unduh.
 					</p>
 				</div>
 				<div className="flex items-center gap-2">
@@ -190,6 +201,15 @@ export default function BatchesPage() {
 													{j.entryName}
 												</span>
 												<span className="flex shrink-0 items-center gap-2">
+													{j.renderedPath && (
+														<a
+															href={`/api/klip/batch-jobs/${encodeURIComponent(j.id)}/video`}
+															download
+															className="text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+														>
+															Unduh
+														</a>
+													)}
 													<span className="text-muted-foreground text-xs">
 														{j.attempts}/{j.maxAttempts}
 													</span>

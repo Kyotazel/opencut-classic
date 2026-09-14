@@ -24,9 +24,20 @@ export type RenderProjectInput = {
 	entryName: string;
 	/** Template yang ditempel setelah project dibuat; kosong = tanpa template. */
 	templateId?: string | null;
+	/** Kalau diisi, halaman ikut merender MP4 dan mengunggahnya. */
+	batchId: string;
+	jobId: string;
 };
 
-export const DEFAULT_JOB_TIMEOUT_MS = 5 * 60_000;
+/**
+ * Batas tunggu satu job, termasuk render.
+ *
+ * Render memakan sekitar 3,3x durasi video (diukur: 24,9 dtk -> 81 dtk). Video
+ * 60 detik berarti ~200 detik render, ditambah ekstraksi video dan pembuatan
+ * project. 30 menit memberi ruang cukup untuk video panjang tanpa membuat
+ * worker menggantung selamanya kalau halaman benar-benar macet.
+ */
+export const DEFAULT_JOB_TIMEOUT_MS = 30 * 60_000;
 
 /**
  * Sesi Chromium yang dipakai ulang antar job.
@@ -115,10 +126,18 @@ export class ChromiumRunner {
 				name: input.entryName,
 			});
 			if (input.templateId) query.set("template", input.templateId);
+			// batch + job membuat halaman ikut merender dan mengunggah hasilnya.
+			query.set("batch", input.batchId);
+			query.set("job", input.jobId);
 			const url = `${this.baseUrl}/internal/batch-job?${query.toString()}`;
 			await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+			// PERHATIKAN tanda tangannya: waitForFunction(fn, arg, options).
+			// Memberi options sebagai argumen KEDUA membuatnya dianggap "arg" dan
+			// timeout tetap default 30 detik - render yang butuh menit akan selalu
+			// gagal walau batasnya sudah dinaikkan.
 			await page.waitForFunction(
 				() => window.__BATCH_JOB_RESULT__ !== undefined,
+				undefined,
 				{ timeout: timeoutMs },
 			);
 			const result = (await page.evaluate(
