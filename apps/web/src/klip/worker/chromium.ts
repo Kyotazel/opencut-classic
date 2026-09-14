@@ -67,28 +67,30 @@ function forwardPageDiagnostics({
 	page.on("console", (message) => {
 		const type = message.type();
 		if (type !== "error" && type !== "warning") return;
+		// message.text() dipakai sebagai isi utama karena itu renderisasi milik
+		// Playwright sendiri - selalu ada isinya. Sebelumnya argumen diubah
+		// manual dan console.warn dengan argumen undefined menghasilkan baris
+		// kosong, sehingga peringatan yang justru penting tidak terbaca.
+		const base = `[chromium:${type}] ${label} ${message.text()}`;
 		void Promise.all(
 			message.args().map((arg) =>
 				arg
-					.evaluate((value: unknown) => {
-						if (value instanceof Error) {
-							return `${value.name}: ${value.message}\n${value.stack ?? ""}`;
-						}
-						if (typeof value === "string") return value;
-						try {
-							return JSON.stringify(value);
-						} catch {
-							return String(value);
-						}
-					})
-					.catch(() => "<argumen tidak terbaca>"),
+					.evaluate((value: unknown) =>
+						value instanceof Error
+							? (value.stack ?? `${value.name}: ${value.message}`)
+							: null,
+					)
+					.catch(() => null),
 			),
 		)
-			.then((parts) => {
-				console.error(`[chromium:${type}] ${label} ${parts.join(" ")}`);
+			.then((stacks) => {
+				const extra = stacks.filter(
+					(s): s is string => typeof s === "string" && s.length > 0,
+				);
+				console.error(extra.length > 0 ? `${base}\n${extra.join("\n")}` : base);
 			})
 			.catch(() => {
-				// Diagnostik tidak boleh menjatuhkan job.
+				console.error(base);
 			});
 	});
 
