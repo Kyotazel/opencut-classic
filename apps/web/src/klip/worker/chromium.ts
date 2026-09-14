@@ -21,7 +21,15 @@ import {
 
 export type BatchJobResult =
 	| { ok: true; projectId: string }
-	| { ok: false; error: string };
+	| {
+			ok: false;
+			error: string;
+			/**
+			 * Stack trace dari halaman. Ada karena event console kalah cepat
+			 * dengan penutupan halaman - lihat catatan di batch-job/page.tsx.
+			 */
+			stack?: string | null;
+	  };
 
 export type RenderProjectInput = {
 	opencutRef: string;
@@ -64,14 +72,25 @@ function forwardPageDiagnostics({
 	page: Page;
 	label: string;
 }): void {
+	// Peringatan GL seperti "GPU stall due to ReadPixels" muncul ribuan kali
+	// dan akan mengubur baris yang penting. Pesan identik dicatat beberapa kali
+	// saja, lalu dibungkam.
+	const seen = new Map<string, number>();
+
 	page.on("console", (message) => {
 		const type = message.type();
 		if (type !== "error" && type !== "warning") return;
+		const key = `${type}|${message.text()}`;
+		const count = (seen.get(key) ?? 0) + 1;
+		seen.set(key, count);
+		if (count > 3) return;
 		// message.text() dipakai sebagai isi utama karena itu renderisasi milik
 		// Playwright sendiri - selalu ada isinya. Sebelumnya argumen diubah
 		// manual dan console.warn dengan argumen undefined menghasilkan baris
 		// kosong, sehingga peringatan yang justru penting tidak terbaca.
-		const base = `[chromium:${type}] ${label} ${message.text()}`;
+		const base =
+			`[chromium:${type}] ${label} ${message.text()}` +
+			(count === 3 ? " (pesan ini tidak dicatat lagi)" : "");
 		void Promise.all(
 			message.args().map((arg) =>
 				arg
@@ -216,7 +235,11 @@ export class ChromiumRunner {
 				() => window.__BATCH_JOB_RESULT__,
 			)) as BatchJobResult | undefined;
 			if (!result) throw new Error("halaman tidak melaporkan hasil");
-			if (!result.ok) throw new Error(result.error);
+			if (!result.ok) {
+				// Stack disertakan supaya tersimpan di klip_batch_jobs.error dan
+				// bisa dibaca dari UI, bukan cuma dari log yang bergulir.
+				throw new Error(result.stack ? `${result.error}\n${result.stack}` : result.error);
+			}
 			return result.projectId;
 		} finally {
 			// Halaman ditutup per job, tetapi CONTEXT-nya tidak: sesi login dipakai

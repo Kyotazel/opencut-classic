@@ -50,13 +50,34 @@ export default function BatchJobPage() {
 		const batchId = params.get("batch");
 		const jobId = params.get("job");
 
-		const fail = (message: string) => {
-			window.__BATCH_JOB_RESULT__ = { ok: false, error: message };
+		/**
+		 * Laporkan kegagalan, LENGKAP dengan stack trace.
+		 *
+		 * KENAPA STACK IKUT DIKIRIM: halaman ini ditutup tepat setelah job
+		 * selesai, dan event console dari Playwright kalah cepat - console.error
+		 * di renderer-manager sudah dipanggil, tapi tidak pernah sampai ke log
+		 * worker. Akibatnya kegagalan seperti "network error" tidak bisa dilacak
+		 * sama sekali. Lewat window.__BATCH_JOB_RESULT__ hasilnya dibaca sinkron
+		 * oleh worker, jadi tidak ada yang bisa hilang.
+		 */
+		const fail = ({
+			error,
+			fallback,
+		}: {
+			error: unknown;
+			fallback: string;
+		}) => {
+			const message = error instanceof Error ? error.message : fallback;
+			const stack = error instanceof Error ? (error.stack ?? null) : null;
+			window.__BATCH_JOB_RESULT__ = { ok: false, error: message, stack };
 			setState({ kind: "error", message });
 		};
 
 		if (!ref || !video) {
-			fail("ref dan video wajib ada di query");
+			fail({
+				error: new Error("ref dan video wajib ada di query"),
+				fallback: "ref dan video wajib ada di query",
+			});
 			return;
 		}
 
@@ -94,7 +115,7 @@ export default function BatchJobPage() {
 				window.__BATCH_JOB_RESULT__ = { ok: true, projectId };
 				setState({ kind: "done", projectId });
 			} catch (error) {
-				fail(error instanceof Error ? error.message : String(error));
+				fail({ error, fallback: "kegagalan tidak diketahui" });
 			}
 		})();
 	}, []);
