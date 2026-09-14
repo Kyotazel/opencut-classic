@@ -754,16 +754,36 @@ bun run klip:setting publish-threshold 2               # ambang circuit breaker
 
 Atau per batch: kolom `klip_batches.ig_account_id` menang atas setelan default.
 
-### 15.7 Yang belum dikerjakan
+### 15.7 Hasil uji publish sungguhan
+
+Sudah diuji dengan satu video (24,9 detik) ke @motivasikaya26:
+
+| Tahap | Hasil |
+|---|---|
+| Render di Chromium | berhasil, MP4 h264 1080x1920 |
+| Percobaan resumable upload | DITOLAK Meta: `The parameter video_url is required` |
+| Fallback lewat `video_url` | **berhasil** |
+| Posting terbit | `https://www.instagram.com/reel/DdQMlT-AeWF/` (HTTP 200) |
+| Percobaan ulang tanpa render ulang | 8,3 detik (vs ~80 detik kalau render lagi) |
+
+**Kesimpulan penting: jalur resumable TIDAK dipakai Meta.** Setiap publish
+selalu jatuh ke `video_url`, jadi `KLIP_PUBLIC_BASE_URL` bukan opsional -
+tanpa itu publish selalu gagal. Nilainya harus domain publik yang melayani
+aplikasi INI, karena server Meta yang mengunduh MP4-nya.
+
+Gejala kalau salah: job berhenti di `stage = publish_failed` dengan pesan
+`Instagram gagal memproses video` dan container berstatus ERROR. Meta tidak
+memberi keterangan lain, jadi pesan itu sekarang menyebut container id dan URL
+yang dipakai - periksa URL-nya dengan `curl -I` sebelum menuduh videonya salah.
+
+### 15.8 Yang belum dikerjakan
 
 - **Batas harian publish IG.** Belum ada. Risiko nyata: 100 video dalam satu
   batch akan ditembakkan berturut-turut sampai IG sendiri yang menolak.
   Rencana: hitung `klip_ig_publish_items` berstatus `published` dalam 24 jam
   terakhir; kalau lewat batas, tunda dengan `next_attempt_at` - jangan
   tandai gagal.
-- **Belum diuji dengan Instagram sungguhan.** Seluruh jalur publish diuji dengan
-  kegagalan yang dipaksa; keberhasilan publish belum pernah lewat kode ini.
-  Percobaan pertama sebaiknya satu video saja.
-- **Rotasi `IG_TOKEN_KEY`** belum pernah dilakukan; token akun sekarang
-  dienkripsi dengan key di `.env.local`.
+- **Rotasi token Instagram** belum pernah dilakukan. Token akun dienkripsi
+  dengan `IG_TOKEN_KEY` di env server; menggantinya membuat token tersimpan
+  tidak bisa didekripsi, jadi semua akun harus dihubungkan ulang.
 
