@@ -187,11 +187,19 @@ export async function processJob({
 
 	// Id project ditentukan di sini supaya worker bisa menautkannya ke job.
 	const opencutRef = randomUUID();
+	// Template ditentukan SEBELUM halaman internal dijalankan: halaman itu yang
+	// menulis layer ke database SEKALIGUS menempelkannya ke timeline. Kalau
+	// template ditempel belakangan dari sini, layer hanya tercatat di database
+	// dan timeline project tidak ikut terisi.
+	const templateId = await resolveBatchTemplateId({
+		explicitTemplateId: batch.templateId,
+	});
 	const projectId = await runner.renderProject({
 		input: {
 			opencutRef,
 			videoUrl: videoUrlFor({ baseUrl, batchId: job.batchId, entryName: job.entryName }),
 			entryName: job.entryName,
+			templateId,
 		},
 	});
 
@@ -213,27 +221,6 @@ export async function processJob({
 		})
 		.where(eq(klipProjects.id, project.id));
 	await setJob({ id: job.id, values: { projectId: project.id, stage: "project_created" } });
-
-	// Tempelkan template. mainDuration dari durasi video supaya layer anchor
-	// "di akhir video" mendarat tepat di ujung.
-	const templateId = await resolveBatchTemplateId({
-		explicitTemplateId: batch.templateId,
-	});
-	if (templateId) {
-		try {
-			const applied = await applyTemplate({
-				projectId: project.id,
-				templateId,
-				mainDuration: video.duration,
-			});
-			if (applied.status !== 200) throw new Error(applied.error);
-			await setJob({ id: job.id, values: { stage: "template_applied" } });
-		} catch (error) {
-			// Project sudah jadi; template gagal jangan membuang hasilnya.
-			const message = error instanceof Error ? error.message : "template failed";
-			await setJob({ id: job.id, values: { error: `template: ${message}` } });
-		}
-	}
 
 	await setJob({
 		id: job.id,

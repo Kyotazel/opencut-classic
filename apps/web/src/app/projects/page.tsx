@@ -14,6 +14,13 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 import { useEditor } from "@/editor/use-editor";
 import { useProjectsStore } from "./store";
 import type {
@@ -620,7 +627,25 @@ function UploadZipButton() {
 function QueueBatchButton() {
 	const [busy, setBusy] = useState(false);
 	const [label, setLabel] = useState("Antrikan batch");
+	// Radix Select menolak value string kosong, jadi "tanpa template"
+	// diwakili sentinel dan diterjemahkan saat mengirim.
+	const NO_TEMPLATE = "__none__";
+	const [templateId, setTemplateId] = useState<string>(NO_TEMPLATE);
+	const [templates, setTemplates] = useState<Array<{ id: string; name: string }>>([]);
 	const fileRef = useRef<HTMLInputElement>(null);
+
+	// Template dimuat sekali saat mount. Kegagalan di sini tidak menghalangi:
+	// batch tetap bisa diantrikan tanpa template.
+	useEffect(() => {
+		fetch("/api/klip/brand-templates")
+			.then((res) => (res.ok ? res.json() : null))
+			.then((body: unknown) => {
+				const list = (body as { templates?: Array<{ id: string; name: string }> } | null)
+					?.templates;
+				if (Array.isArray(list)) setTemplates(list);
+			})
+			.catch(() => {});
+	}, []);
 
 	const handleFile = async ({ files }: { files: FileList | null }) => {
 		if (!files || files.length === 0) return;
@@ -631,15 +656,22 @@ function QueueBatchButton() {
 			setLabel(`Mengantrikan ${zip.name}...`);
 			const form = new FormData();
 			form.append("file", zip);
+			// Template dipilih user, bukan ditebak. Kosong = pakai default global
+			// di klip_settings saat worker mengerjakan.
+			if (templateId && templateId !== NO_TEMPLATE) {
+				form.append("templateId", templateId);
+			}
 			const res = await fetch("/api/klip/batches", { method: "POST", body: form });
 			const body = (await res.json().catch(() => null)) as
-				| { batchId?: string; jobCount?: number; error?: string }
+				| { batchId?: string; jobCount?: number; templateId?: string | null; error?: string }
 				| null;
 			if (!res.ok) {
 				throw new Error(body?.error ?? `Gagal antri: ${zip.name}`);
 			}
 			toast.success(
-				`Batch ${body?.batchId} masuk antrian (${body?.jobCount ?? 0} job). Menunggu worker.`,
+				`Batch ${body?.batchId} masuk antrian (${body?.jobCount ?? 0} job)${
+					body?.templateId ? " + template" : " tanpa template"
+				}. Menunggu worker.`,
 			);
 		} catch (error) {
 			console.error("Batch: queue failed", error);
@@ -659,6 +691,21 @@ function QueueBatchButton() {
 				className="hidden"
 				onChange={(e) => void handleFile({ files: e.target.files })}
 			/>
+			{templates.length > 0 && (
+				<Select value={templateId} onValueChange={setTemplateId}>
+					<SelectTrigger size="sm" className="w-[150px]" aria-label="Template">
+						<SelectValue placeholder="Tanpa template" />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value={NO_TEMPLATE}>Tanpa template</SelectItem>
+						{templates.map((t) => (
+							<SelectItem key={t.id} value={t.id}>
+								{t.name}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+			)}
 			<Button
 				size="lg"
 				variant="outline"

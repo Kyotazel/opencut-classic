@@ -1,10 +1,10 @@
 import { toast } from "sonner";
 import { DEFAULT_BACKGROUND_COLOR } from "@/background/color";
-import { DEFAULT_CANVAS_SIZE } from "@/canvas/sizes";
+import { canvasSizeForVideo } from "@/klip/canvas-size";
 import { DEFAULT_FPS } from "@/fps/defaults";
 import { processMediaAssets } from "@/media/processing";
 import type { MediaAsset } from "@/media/types";
-import type { TProject } from "@/project/types";
+import type { TCanvasSize, TProject } from "@/project/types";
 import { storageService } from "@/services/storage/service";
 import { CURRENT_PROJECT_VERSION } from "@/services/storage/migrations";
 import { buildElementFromMedia } from "@/timeline/element-utils";
@@ -21,6 +21,7 @@ export type BatchProjectItem = {
 	height: number | null;
 	duration: number | null;
 };
+
 
 function baseName({ filename }: { filename: string }): string {
 	const base = filename.split("/").pop() ?? filename;
@@ -104,7 +105,7 @@ export async function createProjectFromServerVideo({
 		currentSceneId: scene.id,
 		settings: {
 			fps: DEFAULT_FPS,
-			canvasSize: DEFAULT_CANVAS_SIZE,
+			canvasSize: canvasSizeForVideo({ width: processed.width, height: processed.height }),
 			canvasSizeMode: "preset",
 			lastCustomCanvasSize: null,
 			originalCanvasSize: null,

@@ -22,6 +22,8 @@ export type RenderProjectInput = {
 	opencutRef: string;
 	videoUrl: string;
 	entryName: string;
+	/** Template yang ditempel setelah project dibuat; kosong = tanpa template. */
+	templateId?: string | null;
 };
 
 export const DEFAULT_JOB_TIMEOUT_MS = 5 * 60_000;
@@ -97,6 +99,7 @@ export class ChromiumRunner {
 				video: input.videoUrl,
 				name: input.entryName,
 			});
+			if (input.templateId) query.set("template", input.templateId);
 			const url = `${this.baseUrl}/internal/batch-job?${query.toString()}`;
 			await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
 			await page.waitForFunction(

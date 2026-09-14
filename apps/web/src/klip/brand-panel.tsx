@@ -10,6 +10,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { useEditor } from "@/editor/use-editor";
 import { processMediaAssets } from "@/media/processing";
+import { materializeBrandLayer } from "@/klip/brand-timeline";
 import {
 	type KlipBrandKind,
 	type KlipBrandLayer,
@@ -478,88 +479,36 @@ export function BrandPanel() {
 				return;
 			}
 			try {
-				// The renderer only knows media registered in the browser media
-				// bin (scene-builder skips elements whose mediaId is unknown).
-				// So fetch the brand file from the server and register it
-				// first; the returned browser id becomes the element mediaId.
-				const serverId = draft.asset_id ?? draft.file;
-				const fileRes = await fetch(`/api/media/${encodeURIComponent(serverId)}`);
-				if (!fileRes.ok) {
-					throw new Error(`Brand file not found on server: ${serverId}`);
-				}
-				const blob = await fileRes.blob();
-				const ext = fileExtension({ filename: draft.file });
-				const file = new File([blob], `${draft.name}${ext}`, {
-					type: blob.type || undefined,
+				// Logika ada di klip/brand-timeline.ts supaya worker memakai jalur yang
+				// sama - kalau tidak, layer tercatat di database tapi timeline tidak
+				// terisi dan template tidak terlihat.
+				const placed = await materializeBrandLayer({
+					editor,
+					layer: draft,
+					canvasWidth,
+					canvasHeight,
+					totalDuration,
 				});
-				const [processed] = await processMediaAssets({ files: [file] });
-				if (!processed) throw new Error("Failed to process brand file");
-				const saved = await editor.media.addMediaAsset({
-					projectId: project.metadata.id,
-					asset: processed,
-				});
-				if (!saved) throw new Error("Failed to register brand media");
-
-				const { element } = klipLayerToElement(
-					{ ...draft, asset_id: saved.id, file: saved.id },
-					{
-						canvasWidth,
-						canvasHeight,
-						totalDuration,
-						assetWidth: saved.width ?? undefined,
-						assetHeight: saved.height ?? undefined,
-					},
+				setLayers((prev) =>
+					prev.map((l) =>
+						l.id === draft.id
+							? {
+									...l,
+									elementId: placed.elementId,
+									trackId: placed.trackId,
+									assetWidth: placed.assetWidth,
+									assetHeight: placed.assetHeight,
+								}
+							: l,
+					),
 				);
-				// Ensure the mapped element points at the registered media.
-				const mapped = { ...element, mediaId: saved.id };
-				// Snapshot existing element ids so the newly inserted one is
-				// identified by diff — deterministic for a single insert,
-				// unlike matching by name/mediaId (breaks on duplicates).
-				const sceneBefore = editor.scenes.getActiveScene();
-				const idsBefore = new Set<string>();
-				for (const track of [
-					sceneBefore.tracks.main,
-					...sceneBefore.tracks.overlay,
-					...sceneBefore.tracks.audio,
-				]) {
-					for (const e of track.elements) idsBefore.add(e.id);
-				}
-				editor.timeline.insertElement({
-					placement: { mode: "auto" },
-					element: mapped,
-				});
-				const scene = editor.scenes.getActiveScene();
-				const allTracks = [scene.tracks.main, ...scene.tracks.overlay, ...scene.tracks.audio];
-				let found: { trackId: string; elementId: string } | null = null;
-				for (const track of allTracks) {
-					const match = track.elements.find((e) => !idsBefore.has(e.id));
-					if (match) {
-						found = { trackId: track.id, elementId: match.id };
-						break;
-					}
-				}
-				if (found) {
-					setLayers((prev) =>
-						prev.map((l) =>
-							l.id === draft.id
-								? {
-										...l,
-										elementId: found!.elementId,
-										trackId: found!.trackId,
-										assetWidth: saved.width ?? null,
-										assetHeight: saved.height ?? null,
-									}
-								: l,
-						),
-					);
-				}
 				toast.success(`Added "${draft.name}" to timeline`);
 			} catch (error) {
 				console.error("Brand panel: insert failed", error);
-				toast.error("Failed to add to timeline");
+				toast.error(error instanceof Error ? error.message : "Failed to add to timeline");
 			}
 		},
-		[canvasHeight, canvasWidth, editor, totalDuration],
+		[canvasHeight, canvasWidth, editor, project, totalDuration],
 	);
 
 	const handleAddToTimeline = useCallback(
