@@ -65,6 +65,26 @@ async function main() {
 		}
 	}
 
+	// Peringatan dini: publish ke Instagram butuh domain PUBLIK, karena server
+	// Meta yang mengunduh MP4-nya. Kalau URL-nya kosong atau menunjuk localhost,
+	// setiap video akan gagal di tahap publish - dan pesan dari Meta tidak
+	// menjelaskan sebabnya. Lebih baik diberitahu sekarang.
+	const { resolveBatchSettings } = await import("@/klip/settings");
+	const settings = await resolveBatchSettings();
+	if (settings.defaultIgAccountId) {
+		const base = (process.env.KLIP_PUBLIC_BASE_URL ?? "").trim();
+		if (!base) {
+			console.warn(
+				"[worker] PERINGATAN: publish IG aktif tapi KLIP_PUBLIC_BASE_URL kosong. " +
+					"Instagram butuh URL publik untuk mengunduh video, jadi publish akan gagal.",
+			);
+		} else if (/localhost|127\.0\.0\.1/.test(base)) {
+			console.warn(
+				`[worker] PERINGATAN: KLIP_PUBLIC_BASE_URL menunjuk ${base} - itu tidak bisa diunduh dari internet, jadi Instagram akan gagal memproses video.`,
+			);
+		}
+	}
+
 	const { runWorker } = await import("@/klip/worker/loop");
 	await runWorker({
 		signal: controller.signal,
