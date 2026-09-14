@@ -22,6 +22,58 @@ const MIME_EXT: Record<string, string> = {
 	"audio/ogg": ".ogg",
 };
 
+
+/**
+ * Ekstensi -> MIME. Dipakai sebagai CADANGAN saat multipart tidak membawa tipe.
+ *
+ * Kenapa perlu: `file.type` di sisi server bergantung pada klien, dan pada
+ * beberapa jalur (mis. unggahan yang File-nya dibaca ulang dari penyimpanan
+ * browser) tipe itu sampai sebagai string kosong. Akibatnya berkas tersimpan
+ * sebagai "application/octet-stream" + ".bin", dan editor menolak memuatnya -
+ * preview jadi hitam walaupun project-nya benar.
+ *
+ * Nama berkas justru lebih andal: ia selalu ikut terkirim, dan ekstensinya
+ * menentukan cara browser mendekode.
+ */
+const EXT_MIME: Record<string, string> = {
+	".mp4": "video/mp4",
+	".m4v": "video/mp4",
+	".webm": "video/webm",
+	".mov": "video/quicktime",
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".webp": "image/webp",
+	".svg": "image/svg+xml",
+	".mp3": "audio/mpeg",
+	".wav": "audio/wav",
+	".m4a": "audio/mp4",
+	".ogg": "audio/ogg",
+};
+
+/** Pakai tipe dari klien kalau dikenal; kalau tidak, simpulkan dari ekstensi. */
+export function resolveMime({
+	reportedType,
+	fileName,
+}: {
+	reportedType: string;
+	fileName: string;
+}): string {
+	// "application/octet-stream" dan string kosong berarti klien tidak tahu.
+	if (
+		reportedType &&
+		reportedType !== "application/octet-stream" &&
+		MIME_EXT[reportedType]
+	) {
+		return reportedType;
+	}
+	const ext = path.extname(fileName).toLowerCase();
+	// "||", bukan "??": reportedType bisa string KOSONG (klien tidak tahu),
+	// dan ?? tidak menangkap string kosong.
+	return EXT_MIME[ext] || reportedType || "application/octet-stream";
+}
+
+
 function assetPath({ projectId, assetId, ext }: { projectId: string; assetId: string; ext: string }): {
 	abs: string;
 	rel: string;
@@ -90,8 +142,8 @@ export async function POST(
 	if (file.size > MAX_MEDIA_BYTES) {
 		return NextResponse.json({ error: "file maksimal 500MB" }, { status: 413 });
 	}
-	const mime = file.type || "application/octet-stream";
-	const ext = MIME_EXT[mime] ?? ".bin";
+	const mime = resolveMime({ reportedType: file.type, fileName: file.name });
+	const ext = MIME_EXT[mime] ?? path.extname(file.name).toLowerCase();
 	const { abs, rel } = assetPath({ projectId, assetId, ext });
 	await mkdir(path.dirname(abs), { recursive: true });
 	await writeFile(abs, Buffer.from(await file.arrayBuffer()));

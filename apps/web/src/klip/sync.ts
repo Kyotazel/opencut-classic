@@ -1,4 +1,4 @@
-import type { MediaType } from "@/media/types";
+import type { MediaAsset, MediaType } from "@/media/types";
 import type { SerializedProject } from "@/services/storage/types";
 
 // Dynamic import: modul storage menarik opencut-wasm yang tidak ada di env test.
@@ -129,6 +129,42 @@ export async function pullProject({ id }: { id: string }): Promise<{
 	return { pulled: true, skippedMedia };
 }
 
+
+/**
+ * Siapkan File untuk diunggah, dengan nama asli dan tipe yang benar.
+ *
+ * OPFS hanya menyimpan isi berkas: nama yang dikembalikan adalah key-nya
+ * (id asset berupa UUID) dan tipenya kosong. Metadata di IndexedDB menyimpan
+ * nama asli, jadi File disusun ulang dari situ. Tanpa ini server menerima
+ * berkas tanpa ekstensi dan menyimpannya sebagai octet-stream.
+ */
+function fileForUpload({ asset }: { asset: MediaAsset }): File {
+	const type = asset.file.type || mimeFromName({ name: asset.name }) || asset.type;
+	if (asset.file.name === asset.name && asset.file.type) return asset.file;
+	return new File([asset.file], asset.name, { type });
+}
+
+/** MIME dari ekstensi nama berkas. */
+function mimeFromName({ name }: { name: string }): string {
+	const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
+	const map: Record<string, string> = {
+		".mp4": "video/mp4",
+		".m4v": "video/mp4",
+		".webm": "video/webm",
+		".mov": "video/quicktime",
+		".png": "image/png",
+		".jpg": "image/jpeg",
+		".jpeg": "image/jpeg",
+		".webp": "image/webp",
+		".svg": "image/svg+xml",
+		".mp3": "audio/mpeg",
+		".wav": "audio/wav",
+		".m4a": "audio/mp4",
+		".ogg": "audio/ogg",
+	};
+	return map[ext] ?? "";
+}
+
 export async function pushProject({
 	id,
 	forceBase,
@@ -183,7 +219,15 @@ export async function pushProject({
 		if (serverIds.has(asset.id)) continue;
 		const form = new FormData();
 		form.set("assetId", asset.id);
-		form.set("file", asset.file);
+		// OPFS mengembalikan File dengan nama = key (id asset, berupa UUID) dan
+		// TANPA tipe MIME - OPFS hanya menyimpan isi berkas. Kalau dikirim apa
+		// adanya, server tidak punya cara mengenali jenis berkasnya dan
+		// menyimpannya sebagai octet-stream + .bin; editor lalu menolak
+		// memuatnya dan preview jadi hitam.
+		//
+		// Nama asli ada di metadata (IndexedDB), jadi File disusun ulang dengan
+		// nama itu - ekstensinya yang dipakai server untuk menentukan MIME.
+		form.set("file", fileForUpload({ asset }));
 		const up = await fetch(`/api/sync/projects/${encodeURIComponent(id)}/media`, {
 			method: "POST",
 			body: form,
