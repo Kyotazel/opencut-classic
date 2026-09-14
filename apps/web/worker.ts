@@ -46,11 +46,31 @@ async function main() {
 		throw new Error("pilih salah satu: --once atau --drain");
 	}
 
+	// --now = tuas "jalankan sekarang": paksa kerja walau di luar window.
+	// Setelan allow_manual_run bisa melarangnya; kalau dilarang, lebih baik
+	// berhenti dengan pesan jelas daripada diam-diam mengabaikan window.
+	let forceNow = process.argv.includes("--now");
+	if (forceNow) {
+		const { resolveBatchSettings } = await import("@/klip/settings");
+		const settings = await resolveBatchSettings();
+		if (!settings.allowManualRun) {
+			throw new Error(
+				"--now ditolak: setelan allow_manual_run sedang mati. " +
+					"Aktifkan dulu kalau memang ingin menjalankan di luar window.",
+			);
+		}
+		if (!settings.windowEnabled) {
+			// Tidak ada window yang dilanggar; perlakukan sebagai jalan biasa.
+			forceNow = false;
+		}
+	}
+
 	const { runWorker } = await import("@/klip/worker/loop");
 	await runWorker({
 		signal: controller.signal,
 		once,
 		drain,
+		forceNow,
 		baseUrl,
 		username,
 		password,

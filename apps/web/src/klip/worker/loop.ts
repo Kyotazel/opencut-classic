@@ -1,6 +1,8 @@
 import { and, eq } from "drizzle-orm";
 import { db, klipBatchJobs } from "@/db";
 import { ChromiumRunner } from "@/klip/worker/chromium";
+import { resolveBatchSettings } from "@/klip/settings";
+import { isWithinWindow, minutesUntilWindow } from "@/klip/worker/window";
 import {
 	claimNextJob,
 	processJob,
@@ -15,6 +17,9 @@ export const IDLE_POLL_MS = 5_000;
 export const BUSY_POLL_MS = 1_000;
 /** Jeda retry untuk kegagalan yang mungkin sembuh sendiri. */
 export const RETRY_DELAY_MS = 5 * 60_000;
+/** Jeda polling saat di luar window. Satu menit cukup: yang ditunggu
+ * hanya pergantian jam, bukan pekerjaan. */
+export const WINDOW_POLL_MS = 60_000;
 
 /**
  * Hitung jadwal retry berikutnya.
@@ -51,6 +56,13 @@ export type WorkerOptions = {
 	log?: (message: string, extra?: unknown) => void;
 	/** Batasi ke satu batch; kosong = job mana pun. Dipakai tes. */
 	batchId?: string;
+	/**
+	 * Abaikan window waktu dan kerjakan sekarang.
+	 *
+	 * Dipakai tuas "jalankan sekarang": user memaksa satu batch jalan di luar
+	 * jam yang diizinkan. Dihormati hanya kalau setelan allow_manual_run aktif.
+	 */
+	forceNow?: boolean;
 	/** Basis URL halaman internal, mis. http://127.0.0.1:3000 */
 	baseUrl: string;
 	/** Kredensial login untuk Chromium. */
@@ -136,6 +148,7 @@ export async function runWorker({
 	drain,
 	log,
 	batchId,
+	forceNow,
 	baseUrl,
 	username,
 	password,
@@ -147,6 +160,35 @@ export async function runWorker({
 	let processed = 0;
 	try {
 		while (!signal?.aborted) {
+			// Window waktu (T3-5): tuas tunggal yang membatasi CPU server, RAM
+			// Chromium, dan laju publish IG sekaligus. Di luar window worker
+			// MENUNGGU - job tidak hilang, hanya ditunda.
+			const settings = await resolveBatchSettings();
+			if (settings.windowEnabled && !forceNow) {
+				const now = new Date();
+				const within = isWithinWindow({
+					now: { hour: now.getHours(), minute: now.getMinutes() },
+					start: settings.windowStart,
+					end: settings.windowEnd,
+				});
+				if (!within) {
+					const wait = minutesUntilWindow({
+						now: { hour: now.getHours(), minute: now.getMinutes() },
+						start: settings.windowStart,
+						end: settings.windowEnd,
+					});
+					say(
+						`di luar window render, menunggu ${wait} menit lagi (jam ${settings.windowStart?.hour ?? 0}:${String(settings.windowStart?.minute ?? 0).padStart(2, "0")}-${settings.windowEnd?.hour ?? 0}:${String(settings.windowEnd?.minute ?? 0).padStart(2, "0")})`,
+					);
+					if (once || drain) break;
+					await sleep({ ms: WINDOW_POLL_MS, signal });
+					continue;
+				}
+			}
+			if (settings.windowEnabled && forceNow) {
+				say("window dimatikan untuk proses ini (jalankan sekarang)");
+			}
+
 			const job = await claimNextJob({ batchId });
 			if (!job) {
 				// once = satu job; drain = habiskan yang siap; selain itu tunggu
