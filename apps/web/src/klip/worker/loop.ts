@@ -202,6 +202,10 @@ export async function runWorker({
 				const result = await processJob({ job, runner, baseUrl });
 				if (result.kind === "rendered") {
 					say(`selesai ${job.id} -> project ${result.projectId}`);
+				} else if (result.kind === "published") {
+					say(
+						`publish ${job.id} -> ${result.permalink ?? "(permalink tidak dikembalikan IG)"}`,
+					);
 				} else if (result.kind === "skipped") {
 					say(`lewati ${job.id}: ${result.reason}`);
 				} else {

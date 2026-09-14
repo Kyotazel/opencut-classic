@@ -5,6 +5,7 @@ import { listZipEntries, saveBatchZip } from "@/klip/batch-store";
 import { createBatch, getBatch, listBatchJobs, resolveDefaultOwnerUserId } from "@/klip/batch-service";
 import { listBatches, summarizeJobs } from "@/klip/batch-query";
 import { dataRoot, UploadError } from "@/klip/upload";
+import { MAX_CAPTION_LENGTH } from "@/klip/ig-publish";
 
 /**
  * POST /api/klip/batches — catat batch, JANGAN kerjakan (Tahap 1).
@@ -113,6 +114,10 @@ export async function POST(request: NextRequest) {
 			typeof body.template_id === "string" && body.template_id.trim()
 				? body.template_id.trim()
 				: null;
+		const caption =
+			typeof body.caption === "string" && body.caption.trim()
+				? body.caption.trim().slice(0, MAX_CAPTION_LENGTH)
+				: null;
 		// Owner dicek setelah body valid, supaya request cacat tetap 400.
 		const ownerUserId = requireOwner();
 		if (!ownerUserId) return noOwnerResponse();
@@ -151,7 +156,7 @@ export async function POST(request: NextRequest) {
 		if (!filename.toLowerCase().endsWith(".zip")) {
 			return NextResponse.json({ error: "zip_url must point to a .zip" }, { status: 400 });
 		}
-		return await persist({ bytes, filename, templateId, source: "api", ownerUserId });
+		return await persist({ bytes, filename, templateId, caption, source: "api", ownerUserId });
 	}
 
 	// multipart (UI)
@@ -180,12 +185,19 @@ export async function POST(request: NextRequest) {
 	const rawTemplate = form.get("templateId");
 	const templateId =
 		typeof rawTemplate === "string" && rawTemplate.trim() ? rawTemplate.trim() : null;
+	// Caption untuk semua video di batch. Kosong = posting tanpa caption.
+	const rawCaption = form.get("caption");
+	const caption =
+		typeof rawCaption === "string" && rawCaption.trim()
+			? rawCaption.trim().slice(0, MAX_CAPTION_LENGTH)
+			: null;
 	const ownerUserId = requireOwner();
 	if (!ownerUserId) return noOwnerResponse();
 	return await persist({
 		bytes: Buffer.from(await file.arrayBuffer()),
 		filename: file.name,
 		templateId,
+		caption,
 		source: "upload",
 		ownerUserId,
 	});
@@ -195,12 +207,14 @@ async function persist({
 	bytes,
 	filename,
 	templateId,
+	caption,
 	source,
 	ownerUserId,
 }: {
 	bytes: Buffer;
 	filename: string;
 	templateId: string | null;
+	caption: string | null;
 	source: "upload" | "api";
 	ownerUserId: string;
 }) {
@@ -217,6 +231,7 @@ async function persist({
 				zipBytes: bytes.length,
 				entryNames,
 				templateId,
+				caption,
 				source,
 				ownerUserId,
 			},
@@ -227,6 +242,7 @@ async function persist({
 				status: "queued",
 				jobCount: created.jobCount,
 				templateId: created.templateId,
+				caption: created.caption,
 			},
 			{ status: 202 },
 		);

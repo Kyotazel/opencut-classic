@@ -13,6 +13,8 @@ type BatchRow = {
 	id: string;
 	ownerUserId: string | null;
 	templateId: string | null;
+	/** Caption Instagram untuk seluruh video di batch ini. */
+	caption: string | null;
 	source: "upload" | "api";
 	status: "queued" | "running" | "done" | "partial" | "failed" | "halted";
 	total: number;
@@ -32,6 +34,22 @@ type JobRow = {
 	error: string | null;
 	/** Terisi setelah render selesai dan berkasnya tersimpan di server. */
 	renderedPath: string | null;
+	/** Tautan postingan Instagram, terisi setelah publish berhasil. */
+	permalink: string | null;
+};
+
+/**
+ * Tahap yang perlu dilihat manusia.
+ *
+ * Tahap normal (extracted, project_created, render_done, publishing) tidak
+ * ditampilkan supaya baris tidak penuh; yang ditampilkan hanya tahap yang
+ * butuh tindakan atau menjelaskan kenapa sebuah video berhenti.
+ */
+const STAGE_NOTE: Record<string, string> = {
+	no_ig_account: "tanpa akun IG - publish dilewati",
+	publish_skipped: "publish dilewati",
+	publish_failed: "publish gagal",
+	publish_rate_limited: "kena batas laju IG",
 };
 
 const STATUS_STYLE: Record<string, string> = {
@@ -107,8 +125,9 @@ export default function BatchesPage() {
 				<div>
 					<h1 className="text-lg font-semibold">Antrian batch</h1>
 					<p className="text-muted-foreground text-sm">
-						ZIP yang sudah masuk antrian. Worker memprosesnya satu per satu; setiap
-						video yang selesai dirender punya tautan Unduh.
+						ZIP yang sudah masuk antrian. Worker memprosesnya satu per satu:
+						render, lalu publish ke Instagram kalau akun tujuannya sudah diatur.
+						Video yang sudah dirender punya tautan Unduh.
 					</p>
 				</div>
 				<div className="flex items-center gap-2">
@@ -177,6 +196,12 @@ export default function BatchesPage() {
 								{b.templateId && <span>Template: {b.templateId}</span>}
 							</div>
 
+							{b.caption && (
+								<p className="text-muted-foreground truncate text-xs" title={b.caption}>
+									Caption: {b.caption}
+								</p>
+							)}
+
 							{b.haltedReason && (
 								<p className="text-destructive text-xs">
 									Dihentikan: {b.haltedReason}
@@ -201,6 +226,24 @@ export default function BatchesPage() {
 													{j.entryName}
 												</span>
 												<span className="flex shrink-0 items-center gap-2">
+														{j.stage && STAGE_NOTE[j.stage] && (
+															<span
+																className="text-destructive text-xs"
+																title={j.error ?? undefined}
+															>
+																{STAGE_NOTE[j.stage]}
+															</span>
+														)}
+													{j.permalink && (
+														<a
+															href={j.permalink}
+															target="_blank"
+															rel="noreferrer"
+															className="text-xs font-medium text-emerald-600 hover:underline dark:text-emerald-400"
+														>
+															Lihat di IG
+														</a>
+													)}
 													{j.renderedPath && (
 														<a
 															href={`/api/klip/batch-jobs/${encodeURIComponent(j.id)}/video`}

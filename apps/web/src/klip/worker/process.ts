@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { and, asc, eq, isNull, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lte, notInArray, or } from "drizzle-orm";
 import { db, klipBatchJobs, klipBatches, klipProjects } from "@/db";
 import { resolveBatchTemplateId } from "@/klip/batch-service";
 import { resolveOrCreateProject } from "@/klip/brand";
@@ -8,6 +8,8 @@ import { applyTemplate } from "@/klip/templates";
 import { dataRoot } from "@/klip/upload";
 import { ChromiumRunner } from "@/klip/worker/chromium";
 import { extractVideosFromZip } from "@/klip/worker/extract";
+import { isRateLimitError, publishRenderedVideo } from "@/klip/worker/publish";
+import { resolveBatchSettings } from "@/klip/settings";
 
 export const WORKER_ID = `worker-${randomUUID().slice(0, 8)}`;
 
@@ -43,6 +45,15 @@ export async function claimNextJob({
 				and(
 					eq(klipBatchJobs.status, "queued"),
 					isNull(klipBatchJobs.lockedAt),
+					// Batch yang dihentikan circuit breaker tidak boleh dilanjutkan:
+					// tanpa ini, sisa job tetap diambil dan video salah terus terkirim.
+					notInArray(
+						klipBatchJobs.batchId,
+						db
+							.select({ id: klipBatches.id })
+							.from(klipBatches)
+							.where(eq(klipBatches.status, "halted")),
+					),
 					batchId ? eq(klipBatchJobs.batchId, batchId) : undefined,
 					or(
 						isNull(klipBatchJobs.nextAttemptAt),
@@ -97,6 +108,14 @@ export async function refreshBatchCounters({
 		.from(klipBatchJobs)
 		.where(eq(klipBatchJobs.batchId, batchId));
 	const total = rows.length;
+	// Batch yang dihentikan circuit breaker statusnya final: hitungan tetap
+	// diperbarui, tapi statusnya tidak boleh dikembalikan jadi "running".
+	const current = await db
+		.select({ status: klipBatches.status })
+		.from(klipBatches)
+		.where(eq(klipBatches.id, batchId))
+		.limit(1);
+	const halted = current[0]?.status === "halted";
 	const done = rows.filter(
 		(r) => r.status === "rendered" || r.status === "published",
 	).length;
@@ -112,7 +131,13 @@ export async function refreshBatchCounters({
 			succeeded: done,
 			failed,
 			total,
-			status: allSettled ? (failed > 0 ? "partial" : "done") : "running",
+			status: halted
+				? "halted"
+				: allSettled
+					? failed > 0
+						? "partial"
+						: "done"
+					: "running",
 			updatedAt: new Date(),
 		})
 		.where(eq(klipBatches.id, batchId));
@@ -139,7 +164,6 @@ export function videoUrlFor({
 	return `${base}/api/klip/batches/${encodeURIComponent(batchId)}/video?${query.toString()}`;
 }
 
-
 /** opencutRef milik project, atau null kalau project tidak ada / belum dibuat. */
 async function opencutRefForProject({
 	projectId,
@@ -155,8 +179,11 @@ async function opencutRefForProject({
 	return rows[0]?.opencutRef ?? null;
 }
 
+type RenderState = { renderedPath: string | null };
+
 export type ProcessResult =
-	| { kind: "rendered"; projectId: string; video: string }
+	| { kind: "rendered"; projectId: string; video: string; note?: string }
+	| { kind: "published"; projectId: string; video: string; permalink: string | null }
 	| { kind: "skipped"; reason: string }
 	| { kind: "failed"; error: string };
 
@@ -180,6 +207,20 @@ export async function processJob({
 		.limit(1);
 	const batch = batches[0];
 	if (!batch) return { kind: "failed", error: "batch not found" };
+
+	// Kalau job ini sudah punya hasil render (mis. percobaan sebelumnya gagal di
+	// tahap publish), JANGAN render ulang - render memakan ~3,3x durasi video dan
+	// mengulanginya hanya membuang waktu serta CPU.
+	const existing = await renderStateForJob({ jobId: job.id });
+	if (existing.renderedPath && job.projectId) {
+		await setJob({ id: job.id, values: { status: "rendering", stage: "render_done" } });
+		return await publishStage({
+			job,
+			batch,
+			projectId: job.projectId,
+			renderedPath: existing.renderedPath,
+		});
+	}
 
 	await setJob({ id: job.id, values: { status: "extracting" } });
 	const { videos, skipped } = await extractVideosFromZip({
@@ -248,16 +289,172 @@ export async function processJob({
 		.where(eq(klipProjects.id, project.id));
 	await setJob({ id: job.id, values: { projectId: project.id, stage: "project_created" } });
 
+	const fresh = await renderStateForJob({ jobId: job.id });
+	if (!fresh.renderedPath) {
+		throw new Error("render selesai tapi berkas tidak tercatat");
+	}
+	return await publishStage({
+		job,
+		batch,
+		projectId: project.id,
+		renderedPath: fresh.renderedPath,
+	});
+}
+
+/** Berkas hasil render milik job, kalau sudah ada. */
+async function renderStateForJob({ jobId }: { jobId: string }): Promise<RenderState> {
+	const rows = await db
+		.select({ renderedPath: klipBatchJobs.renderedPath })
+		.from(klipBatchJobs)
+		.where(eq(klipBatchJobs.id, jobId))
+		.limit(1);
+	return { renderedPath: rows[0]?.renderedPath ?? null };
+}
+
+/**
+ * Tahap publish: kirim video ke Instagram, lalu tandai job selesai.
+ *
+ * Dipisah dari render supaya job yang gagal di tahap ini bisa dicoba ulang
+ * TANPA merender ulang.
+ */
+async function publishStage({
+	job,
+	batch,
+	projectId,
+	renderedPath,
+}: {
+	job: ClaimedJob;
+	batch: typeof klipBatches.$inferSelect;
+	projectId: string;
+	renderedPath: string;
+}): Promise<ProcessResult> {
+	const settings = await resolveBatchSettings();
+	const igAccountId = batch.igAccountId ?? settings.defaultIgAccountId;
+	if (!igAccountId) {
+		// Tanpa akun tujuan, publish dilewati - bukan kegagalan. Berisik di log
+		// supaya tidak terlihat seperti sukses padahal tidak dikirim ke mana pun.
+		await setJob({
+			id: job.id,
+			values: {
+				status: "rendered",
+				stage: "no_ig_account",
+				attempts: job.attempts + 1,
+				lockedAt: null,
+				lockedBy: null,
+				error: null,
+			},
+		});
+		return {
+			kind: "rendered",
+			projectId,
+			video: job.entryName,
+			note: "tidak ada akun IG tujuan; publish dilewati",
+		};
+	}
+
+	await setJob({ id: job.id, values: { status: "publishing", stage: "publishing" } });
+	const outcome = await publishRenderedVideo({
+		projectId,
+		renderedPath,
+		caption: batch.caption ?? null,
+		igAccountId,
+	});
+
+	if (outcome.kind === "published") {
+		await db
+			.update(klipBatchJobs)
+			.set({
+				status: "published",
+				stage: "published",
+				permalink: outcome.permalink,
+				attempts: job.attempts + 1,
+				lockedAt: null,
+				lockedBy: null,
+				error: null,
+				updatedAt: new Date(),
+			})
+			.where(eq(klipBatchJobs.id, job.id));
+		return {
+			kind: "published",
+			projectId,
+			video: job.entryName,
+			permalink: outcome.permalink,
+		};
+	}
+
+	if (outcome.kind === "skipped") {
+		await setJob({
+			id: job.id,
+			values: {
+				status: "rendered",
+				stage: "publish_skipped",
+				attempts: job.attempts + 1,
+				lockedAt: null,
+				lockedBy: null,
+				error: outcome.reason,
+			},
+		});
+		return { kind: "rendered", projectId, video: job.entryName, note: outcome.reason };
+	}
+
+	// Gagal. Tahapnya ditulis LEBIH DULU karena circuit breaker membaca kolom
+	// stage - kalau ditulis setelahnya, kegagalan ini tidak akan terhitung.
+	const rateLimited = isRateLimitError({ message: outcome.error });
 	await setJob({
 		id: job.id,
 		values: {
-			status: "rendered",
-			stage: "done",
-			attempts: job.attempts + 1,
-			lockedAt: null,
-			lockedBy: null,
-			error: null,
+			stage: rateLimited ? "publish_rate_limited" : "publish_failed",
+			error: outcome.error,
 		},
 	});
-	return { kind: "rendered", projectId: project.id, video: video.entryName };
+	await maybeHaltBatch({ batchId: job.batchId, rateLimited });
+	throw new Error(outcome.error);
+}
+
+/**
+ * Circuit breaker (N1): kalau beberapa job BERTURUT-TURUT gagal di tahap
+ * publish, hentikan seluruh batch.
+ *
+ * Alasannya: satu kegagalan bisa kebetulan, dua berturut-turut biasanya berarti
+ * ada yang salah dengan template atau video - dan tanpa ini, puluhan video
+ * salah akan terkirim ke akun publik sebelum ada yang sadar.
+ *
+ * Kegagalan karena batas laju TIDAK dihitung: itu bukan tanda konten salah.
+ *
+ * Diekspor untuk tes: perilakunya hanya bisa diuji dengan menyusun riwayat job
+ * secara langsung, dan itu jauh lebih murah daripada menjalankan Chromium.
+ */
+export async function maybeHaltBatch({
+	batchId,
+	rateLimited,
+}: {
+	batchId: string;
+	rateLimited: boolean;
+}): Promise<void> {
+	if (rateLimited) return;
+	const settings = await resolveBatchSettings();
+	const threshold = settings.publishFailureThreshold;
+	// Diambil lebih banyak dari ambang, lalu disaring ke stage "publish_failed".
+	// Baris rate-limited punya stage sendiri, jadi tersaring otomatis dan tidak
+	// pernah ikut menghitung - sesuai alasan di atas.
+	const recent = await db
+		.select({ stage: klipBatchJobs.stage })
+		.from(klipBatchJobs)
+		.where(eq(klipBatchJobs.batchId, batchId))
+		.orderBy(desc(klipBatchJobs.updatedAt))
+		.limit(threshold + 4);
+	const failures = recent.filter((r) => r.stage === "publish_failed");
+	if (failures.length < threshold) return;
+
+	await db
+		.update(klipBatches)
+		.set({
+			status: "halted",
+			haltedReason:
+				"Dihentikan otomatis: " +
+				settings.publishFailureThreshold +
+				" video berturut-turut gagal dipublish. Periksa template dan akun Instagram, lalu jalankan lagi.",
+			updatedAt: new Date(),
+		})
+		.where(eq(klipBatches.id, batchId));
 }

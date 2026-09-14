@@ -12,6 +12,8 @@
  *   bun run klip:setting window off           # matikan window
  *   bun run klip:setting allow-manual on|off
  *   bun run klip:setting template <id|none>
+ *   bun run klip:setting ig-account <id|none>     # akun IG tujuan publish
+ *   bun run klip:setting publish-threshold <n>    # kegagalan berturut -> hentikan
  */
 import {
 	resolveBatchSettings,
@@ -82,6 +84,27 @@ async function main(): Promise<void> {
 			value: v === "none" ? "" : v,
 		});
 		console.log(`Template default: ${v === "none" ? "(dihapus)" : v}`);
+	} else if (cmd === "ig-account") {
+		const v = rest[0];
+		if (!v) throw new Error("pakai: ig-account <id>  atau  ig-account none");
+		await setSetting({
+			key: SETTING_KEYS.defaultIgAccountId,
+			value: v === "none" ? "" : v,
+		});
+		console.log(`Akun IG default: ${v === "none" ? "(dihapus)" : v}`);
+	} else if (cmd === "publish-threshold") {
+		const v = rest[0];
+		const n = Number(v);
+		if (!v || !Number.isInteger(n) || n < 1 || n > 20) {
+			throw new Error("pakai: publish-threshold <1-20>");
+		}
+		await setSetting({
+			key: SETTING_KEYS.publishFailureThreshold,
+			value: String(n),
+		});
+		console.log(
+			`Ambang hentikan: ${n} kegagalan publish berturut-turut mematikan batch.`,
+		);
 	} else {
 		throw new Error(`perintah tidak dikenal: ${cmd}`);
 	}

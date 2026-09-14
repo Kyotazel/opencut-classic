@@ -618,3 +618,152 @@ mysql -u klip -p klip -N -e "SHOW TABLES LIKE 'klip_batch%'; SHOW TABLES LIKE 'k
 
 Server juga perlu Chromium: `bunx playwright install chromium` (+ sekitar 400 MB;
 cek disk dulu - bagian 4).
+
+---
+
+## 15. Tahap 4 - publish otomatis ke Instagram
+
+Tujuan tahap ini: setelah video selesai dirender, worker mengirimnya sendiri ke
+Instagram. Tidak ada manusia yang mengunggah.
+
+### 15.1 Alur
+
+```
+job diklaim
+  |
+  +-- rendered_path sudah ada? --ya--> LANGSUNG publish (tidak render ulang)
+  |                                     render ~3,3x durasi video, jadi
+  |                                     mengulanginya murni pemborosan
+  +-- tidak --> ekstrak zip -> Chromium render -> rendered_path tersimpan
+                                                        |
+                                                        v
+                                            ambil akun IG tujuan
+                                                        |
+                     +----------------------------------+------------------+
+                     |                                  |                  |
+              tidak ada akun                     akun tidak aktif     akun aktif
+                     |                                  |                  |
+             stage no_ig_account              stage publish_skipped   kirim ke IG
+             status rendered                  status rendered              |
+             (bukan kegagalan)                (bukan kegagalan)     +------+------+
+                                                                    |             |
+                                                                berhasil       gagal
+                                                                    |             |
+                                                            status published   stage publish_failed
+                                                            + permalink        atau
+                                                                               publish_rate_limited
+```
+
+Publish memakai jalur yang sudah ada (`src/klip/ig-publish.ts`, `processItems`):
+IG menerima bytes langsung, jadi berkas render di server cukup. `video_path`
+diarahkan ke berkas render, BUKAN disalin ke `publishes/` - supaya tidak ada
+duplikasi berkas 20-50 MB per video.
+
+### 15.2 Keputusan
+
+| # | Pertanyaan | Keputusan | Alasan |
+|---|---|---|---|
+| P1 | Caption per batch atau per video? | **Per batch** | Caption adalah maksud user, bukan sesuatu yang bisa ditebak sistem. Satu ZIP biasanya satu topik. |
+| P2 | Window render berlaku untuk publish? | **Ya** | Window adalah "jam kerja robot"; publish juga tindakan keluar. |
+| P3 | Berapa kegagalan sebelum batch dihentikan? | **2 berturut-turut** (bisa diatur) | Satu kegagalan bisa kebetulan; dua biasanya berarti template atau video memang salah. |
+| P4 | Kegagalan batas laju dihitung? | **Tidak** | Batas laju bukan tanda konten salah - itu hanya perlu ditunggu. Kalau dihitung, batch sehat berhenti sia-sia. |
+| P5 | Percobaan ulang publish? | **Pakai `max_attempts` job (5)** | Sudah ada `next_attempt_at`; publish yang gagal TIDAK merender ulang. |
+
+### 15.3 Yang berubah
+
+**Skema** - migrasi `0009_yellow_human_fly.sql`:
+
+```sql
+ALTER TABLE `klip_batch_jobs` ADD `permalink` text;
+ALTER TABLE `klip_batches` ADD `ig_account_id` varchar(64);
+```
+
+`klip_batches.caption` sudah ditambahkan di migrasi `0008_rainy_gauntlet.sql`.
+
+Catatan ledger: `drizzle_migrations.id` MELOMPAT (9 -> 16) setelah migrasi
+dijalankan drizzle-kit. Itu wajar - pencocokan migrasi memakai `created_at`,
+bukan `id`. Jangan "perbaiki" id-nya.
+
+**Kode:**
+
+| Berkas | Isi |
+|---|---|
+| `src/klip/worker/publish.ts` | `publishRenderedVideo()`, `isRateLimitError()` |
+| `src/klip/worker/process.ts` | `publishStage()`, `maybeHaltBatch()`, `renderStateForJob()` |
+| `src/klip/worker/loop.ts` | menangani hasil `published` |
+| `src/klip/settings.ts` | `default_ig_account_id`, `publish_failure_threshold` |
+| `scripts/klip-settings.ts` | perintah `ig-account`, `publish-threshold` |
+| `src/app/batches/page.tsx` | tautan "Lihat di IG", caption batch, catatan tahap |
+
+### 15.4 Tiga lubang yang ketahuan saat menulis tes
+
+Ketiganya TIDAK ketahuan dari typecheck - hanya ketahuan karena tes menyusun
+riwayat job secara langsung lalu memeriksa kolomnya.
+
+1. **`refreshBatchCounters` menimpa status `halted`.** Worker memanggilnya
+   setelah setiap job, jadi batch yang baru saja dihentikan circuit breaker
+   langsung kembali berstatus `running` - breaker-nya praktis tidak berefek.
+   Sekarang status `halted` dibekukan; hitungannya tetap diperbarui.
+2. **`claimNextJob` tetap mengambil job dari batch `halted`.** Tanpa
+   `NOT IN (batch halted)`, sisa video salah terus terkirim ke akun publik.
+3. **Baris `publish_rate_limited` ikut terhitung sebagai kegagalan.** Filter
+   lama memakai `stage.startsWith("publish")`, yang juga cocok untuk
+   `publish_rate_limited` dan `publish_skipped`. Sekarang hanya
+   `publish_failed` yang dihitung, dan tahap itu ditulis SEBELUM breaker
+   memeriksa - kalau ditulis setelahnya, kegagalan terbaru tidak ikut dinilai.
+
+### 15.5 Tes
+
+`apps/web/src/klip/worker/__tests__/publish-stage.test.ts` - 10 tes, semuanya
+lulus. Tes ini sengaja **tidak memanggil Instagram** dan **tidak menjalankan
+Chromium**:
+
+- runner palsu yang meledak kalau `renderProject` dipanggil, jadi "tidak render
+  ulang" benar-benar dibuktikan, bukan diasumsikan;
+- kegagalan publish dipaksa lewat berkas render yang sengaja tidak dibuat,
+  sehingga tidak ada permintaan jaringan sama sekali;
+- setelan `default_ig_account_id` dan `publish_failure_threshold` disimpan
+  lalu dipulihkan di `afterAll`.
+
+Cara menjalankan (butuh `--env-file`, kalau tidak validasi env gagal):
+
+```bash
+cd apps/web
+bun run test                                  # semua
+bun run test src/klip/worker/__tests__/        # hanya worker
+```
+
+Empat kegagalan lain di suite ini **sudah ada sebelumnya** dan tidak berkaitan:
+`wasm.__wbindgen_start is not a function` dari glue `opencut-wasm`, muncul di
+`src/masks`, `src/services`, dan `src/timeline`.
+
+### 15.6 Cara mengaktifkan publish
+
+Secara bawaan publish **DIMATIKAN**: `default_ig_account_id` kosong, jadi setiap
+job berhenti di `stage = no_ig_account` dan hanya menghasilkan berkas MP4 yang
+bisa diunduh. Ini disengaja - mengirim ke akun publik itu tindakan yang tidak
+bisa dibatalkan.
+
+```bash
+cd apps/web
+bun run klip:setting                                   # lihat setelan sekarang
+bun run klip:setting ig-account <id_akun>              # aktifkan publish
+bun run klip:setting ig-account none                   # matikan lagi
+bun run klip:setting publish-threshold 2               # ambang circuit breaker
+```
+
+Atau per batch: kolom `klip_batches.ig_account_id` menang atas setelan default.
+
+### 15.7 Yang belum dikerjakan
+
+- **Batas harian publish IG.** Belum ada. Risiko nyata: 100 video dalam satu
+  batch akan ditembakkan berturut-turut sampai IG sendiri yang menolak.
+  Rencana: hitung `klip_ig_publish_items` berstatus `published` dalam 24 jam
+  terakhir; kalau lewat batas, tunda dengan `next_attempt_at` - jangan
+  tandai gagal.
+- **Belum diuji dengan Instagram sungguhan.** Seluruh jalur publish diuji dengan
+  kegagalan yang dipaksa; keberhasilan publish belum pernah lewat kode ini.
+  Percobaan pertama sebaiknya satu video saja.
+- **Rotasi `IG_TOKEN_KEY`** belum pernah dilakukan; token akun sekarang
+  dienkripsi dengan key di `.env.local`.
+

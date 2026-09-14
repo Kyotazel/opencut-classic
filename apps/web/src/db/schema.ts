@@ -304,6 +304,15 @@ export const klipBatches = mysqlTable("klip_batches", {
 	ownerUserId: varchar("owner_user_id", { length: 64 }),
 	// null = pakai default global dari klip_settings (keputusan #3).
 	templateId: varchar("template_id", { length: 64 }),
+	// Caption Instagram untuk SEMUA video di batch ini.
+	//
+	// Kenapa per batch, bukan per video: caption adalah bagian dari maksud user,
+	// bukan sesuatu yang bisa ditebak sistem. Video yang diunggah dalam satu ZIP
+	// biasanya satu topik, jadi caption-nya memang sama. Dikosongkan = posting
+	// tanpa caption.
+	caption: text("caption"),
+	// Akun IG tujuan; null = pakai default_ig_account_id dari klip_settings.
+	igAccountId: varchar("ig_account_id", { length: 64 }),
 	source: mysqlEnum("source", ["upload", "api"]).default("upload").notNull(),
 	zipPath: varchar("zip_path", { length: 1024 }).notNull(),
 	zipBytes: double("zip_bytes"),
@@ -351,6 +360,8 @@ export const klipBatchJobs = mysqlTable("klip_batch_jobs", {
 		.notNull(),
 	// Tahap terakhir yang BERHASIL. Dipakai untuk resume idempoten (T2-2).
 	stage: varchar("stage", { length: 32 }),
+	// Tautan postingan setelah berhasil dipublish ke Instagram.
+	permalink: text("permalink"),
 	attempts: int("attempts").default(0).notNull(),
 	maxAttempts: int("max_attempts").default(5).notNull(),
 	// Jadwal retry; boleh besok kalau kena rate limit IG (keputusan #2).

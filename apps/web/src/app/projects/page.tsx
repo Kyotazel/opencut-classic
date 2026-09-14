@@ -631,6 +631,8 @@ function QueueBatchButton() {
 	// diwakili sentinel dan diterjemahkan saat mengirim.
 	const NO_TEMPLATE = "__none__";
 	const [templateId, setTemplateId] = useState<string>(NO_TEMPLATE);
+	// Caption untuk SEMUA video di batch. Kosong = posting tanpa caption.
+	const [caption, setCaption] = useState("");
 	const [templates, setTemplates] = useState<Array<{ id: string; name: string }>>([]);
 	const fileRef = useRef<HTMLInputElement>(null);
 
@@ -661,6 +663,7 @@ function QueueBatchButton() {
 			if (templateId && templateId !== NO_TEMPLATE) {
 				form.append("templateId", templateId);
 			}
+			if (caption.trim()) form.append("caption", caption.trim());
 			const res = await fetch("/api/klip/batches", { method: "POST", body: form });
 			const body = (await res.json().catch(() => null)) as
 				| { batchId?: string; jobCount?: number; templateId?: string | null; error?: string }
@@ -690,6 +693,14 @@ function QueueBatchButton() {
 				accept=".zip"
 				className="hidden"
 				onChange={(e) => void handleFile({ files: e.target.files })}
+			/>
+			<Input
+				value={caption}
+				onChange={(e) => setCaption(e.target.value)}
+				placeholder="Caption IG (opsional)"
+				className="hidden w-[200px] md:block"
+				maxLength={2200}
+				aria-label="Caption Instagram"
 			/>
 			{templates.length > 0 && (
 				<Select value={templateId} onValueChange={setTemplateId}>

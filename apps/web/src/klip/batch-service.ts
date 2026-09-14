@@ -37,6 +37,8 @@ export type CreateBatchInput = {
 	zipBytes: number;
 	entryNames: string[];
 	templateId: string | null;
+	/** Caption IG untuk semua video di batch; kosong = tanpa caption. */
+	caption: string | null;
 	source: BatchSource;
 	ownerUserId: string | null;
 };
@@ -45,6 +47,7 @@ export type CreatedBatch = {
 	id: string;
 	jobCount: number;
 	templateId: string | null;
+	caption: string | null;
 	ownerUserId: string | null;
 };
 
@@ -67,6 +70,7 @@ export async function createBatch({
 		id,
 		ownerUserId: input.ownerUserId,
 		templateId: input.templateId,
+		caption: input.caption,
 		source: input.source,
 		zipPath: input.zipPath,
 		zipBytes: input.zipBytes,
@@ -85,7 +89,13 @@ export async function createBatch({
 			maxAttempts: 5,
 		})),
 	);
-	return { id, jobCount: total, templateId: input.templateId, ownerUserId: input.ownerUserId };
+	return {
+		id,
+		jobCount: total,
+		templateId: input.templateId,
+		caption: input.caption,
+		ownerUserId: input.ownerUserId,
+	};
 }
 
 export async function getBatch({ id }: { id: string }) {

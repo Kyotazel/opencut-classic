@@ -1,0 +1,1 @@
+ALTER TABLE `klip_batches` ADD `caption` text;
