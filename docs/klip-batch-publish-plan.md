@@ -494,16 +494,89 @@ Worker butuh env: `APP_USER`, `APP_PASSWORD`, dan `KLIP_WORKER_BASE_URL`
 
 ---
 
-## 13. Langkah berikutnya
+## 13. Tahap 3 - Render MP4 (SUDAH DIUJI KELAYAKANNYA)
 
-**Tahap 3: render MP4.** Ini yang paling rapuh (lihat bagian 4) - perlu dijawab:
+Pertanyaan T3-1 di bagian 7 ("belum bisa dijanjikan") **sudah terjawab** dengan
+uji nyata. Berikut hasilnya.
 
-- Apakah render di Chromium jalan tanpa GPU?
-- Berapa lama 1 video?
-- Apakah hasilnya identik dengan yang terlihat di browser?
+### Jawaban T3-1
 
-Karena worker sudah memakai Chromium, **infrastruktur Tahap 3 sudah ada**.
-Yang kurang hanya memicu render dari halaman internal dan menyimpan MP4-nya.
+| Pertanyaan | Jawaban |
+|---|---|
+| Render jalan tanpa GPU? | **Ya** |
+| Berapa lama 1 video? | **~3,3x durasi video** (24,9 dtk -> 81 detik) |
+| Hasilnya sama dengan di browser? | **Ya** - memakai exporter yang sama |
+
+### Temuan teknis
+
+**1. WebCodecs ADA di Chromium headless** - tapi hanya di *secure context*.
+Penting: pengujian di halaman kosong (`about:blank`) memberi hasil "tidak ada",
+padahal di `localhost`/HTTPS tersedia. Jangan tertipu saat menguji.
+
+**2. Codec yang didukung** (1080x1920):
+
+| Codec | Status |
+|---|---|
+| `avc1.640028` (H.264 High) | DIDUKUNG |
+| `avc1.4d002a` (H.264 Main) | DIDUKUNG |
+| `vp8`, `vp09`, `av01` | DIDUKUNG |
+| `avc1.42001f` (H.264 **Baseline**) | **TIDAK** |
+| Audio `opus`, `mp4a.40.2` | DIDUKUNG |
+
+OpenCut memakai `mp4` + codec `avc`, jadi jalur default sudah aman.
+
+**3. Hasil render sungguhan** (project hasil worker, template "hope well"):
+
+```
+durasi  : 32,02 dtk   (24,9 utama + 7,04 post-roll)
+video   : h264 1080x1920 30fps
+audio   : aac
+ukuran  : 21,2 MB
+waktu   : 81 detik
+```
+
+Frame detik ke-5: video utama + watermark. Frame detik ke-28: post-roll
+tampil lebar penuh. **Template ikut ter-render dengan benar.**
+
+### Yang perlu dibangun
+
+1. **Halaman internal menerima perintah render** - panggil
+   `editor.renderer.exportProject()`, hasilnya `ArrayBuffer`.
+2. **Endpoint penyimpanan MP4** - terima buffer dari Chromium, simpan ke disk.
+   Chromium tidak bisa menulis ke disk server, jadi harus lewat HTTP.
+3. **Status job** - tambah tahap `rendering` -> `rendered` sebenarnya (saat ini
+   `rendered` berarti "project siap", belum ada berkas).
+4. **Window waktu (jam 11-15) + tuas "jalankan sekarang"** (T3-5).
+5. **Batasi 1 render bersamaan** (T3-4) - sudah serial, tinggal dipastikan.
+
+### Perkiraan kapasitas
+
+Dengan 3,3x durasi:
+
+- 30 dtk video -> ~100 detik render
+- 6 video -> ~10 menit
+- 50 video -> ~83 menit (belum termasuk ekstrak)
+
+Inilah alasan window waktu penting: render 50 video akan memakai CPU server
+selama lebih dari satu jam.
+
+### Catatan risiko yang masih berlaku
+
+- **T3-2** Chromium ~400 MB di server; disk `third` sudah ~85%. Cek dulu.
+- **T3-4** Batasi 1 render bersamaan untuk melindungi 13 vhost lain.
+- Belum diuji di server. Angka di atas dari mesin lokal (MacBook).
+
+---
+
+## 14. Langkah berikutnya
+
+Urutan yang disarankan:
+
+1. **Tes worker** - `worker/__tests__/` masih kosong. Tiga bug sesi ini lolos dari
+   tes dan hanya ketahuan saat user mencoba sendiri.
+2. **Tahap 3** - render MP4 (bagian 13 di atas).
+3. **Deploy ke server** - termasuk Chromium + pm2, setelah semuanya beres.
+4. **Tahap 4** - publish IG + retry + circuit breaker.
 
 ### Deploy ke server
 
