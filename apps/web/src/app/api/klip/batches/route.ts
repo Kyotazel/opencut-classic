@@ -118,6 +118,10 @@ export async function POST(request: NextRequest) {
 			typeof body.caption === "string" && body.caption.trim()
 				? body.caption.trim().slice(0, MAX_CAPTION_LENGTH)
 				: null;
+		const igAccountId =
+			typeof body.ig_account_id === "string" && body.ig_account_id.trim()
+				? body.ig_account_id.trim().slice(0, 64)
+				: null;
 		// Owner dicek setelah body valid, supaya request cacat tetap 400.
 		const ownerUserId = requireOwner();
 		if (!ownerUserId) return noOwnerResponse();
@@ -156,7 +160,15 @@ export async function POST(request: NextRequest) {
 		if (!filename.toLowerCase().endsWith(".zip")) {
 			return NextResponse.json({ error: "zip_url must point to a .zip" }, { status: 400 });
 		}
-		return await persist({ bytes, filename, templateId, caption, source: "api", ownerUserId });
+		return await persist({
+			bytes,
+			filename,
+			templateId,
+			caption,
+			igAccountId,
+			source: "api",
+			ownerUserId,
+		});
 	}
 
 	// multipart (UI)
@@ -191,6 +203,12 @@ export async function POST(request: NextRequest) {
 		typeof rawCaption === "string" && rawCaption.trim()
 			? rawCaption.trim().slice(0, MAX_CAPTION_LENGTH)
 			: null;
+	// Akun IG tujuan; kosong = pakai default dari klip_settings.
+	const rawIgAccount = form.get("igAccountId");
+	const igAccountId =
+		typeof rawIgAccount === "string" && rawIgAccount.trim()
+			? rawIgAccount.trim().slice(0, 64)
+			: null;
 	const ownerUserId = requireOwner();
 	if (!ownerUserId) return noOwnerResponse();
 	return await persist({
@@ -198,6 +216,7 @@ export async function POST(request: NextRequest) {
 		filename: file.name,
 		templateId,
 		caption,
+		igAccountId,
 		source: "upload",
 		ownerUserId,
 	});
@@ -208,6 +227,7 @@ async function persist({
 	filename,
 	templateId,
 	caption,
+	igAccountId,
 	source,
 	ownerUserId,
 }: {
@@ -215,6 +235,7 @@ async function persist({
 	filename: string;
 	templateId: string | null;
 	caption: string | null;
+	igAccountId: string | null;
 	source: "upload" | "api";
 	ownerUserId: string;
 }) {
@@ -232,6 +253,7 @@ async function persist({
 				entryNames,
 				templateId,
 				caption,
+				igAccountId,
 				source,
 				ownerUserId,
 			},
@@ -243,6 +265,7 @@ async function persist({
 				jobCount: created.jobCount,
 				templateId: created.templateId,
 				caption: created.caption,
+				igAccountId: created.igAccountId,
 			},
 			{ status: 202 },
 		);

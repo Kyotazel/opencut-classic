@@ -21,7 +21,9 @@
     "worker:once": "bun run worker.ts --once",
     "worker:drain": "bun run worker.ts --drain",
     "worker:now": "bun run worker.ts --drain --now",
-    "klip:setting": "bun run scripts/klip-settings.ts"
+    "klip:setting": "bun run scripts/klip-settings.ts",
+    "klip:queue": "bun --env-file=.env.local run scripts/klip-queue.ts",
+    "klip:hapus-batch": "bun --env-file=.env.local run scripts/klip-hapus-batch.ts"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",

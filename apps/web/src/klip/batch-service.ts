@@ -1,5 +1,5 @@
 import { asc, eq } from "drizzle-orm";
-import { db, klipBatchJobs, klipBatches } from "@/db";
+import { db, klipBatchJobs, klipBatches, klipIgAccounts } from "@/db";
 import { newBatchRowId, newJobId } from "@/klip/batch-store";
 import { resolveBatchSettings } from "@/klip/settings";
 
@@ -39,6 +39,13 @@ export type CreateBatchInput = {
 	templateId: string | null;
 	/** Caption IG untuk semua video di batch; kosong = tanpa caption. */
 	caption: string | null;
+	/**
+	 * Akun IG tujuan publish. null = pakai default_ig_account_id dari
+	 * klip_settings. Kalau diisi, akunnya WAJIB ada dan aktif - lebih baik
+	 * batch ditolak saat dibuat daripada puluhan video diam-diam tidak
+	 * terkirim ke mana pun.
+	 */
+	igAccountId: string | null;
 	source: BatchSource;
 	ownerUserId: string | null;
 };
@@ -48,6 +55,7 @@ export type CreatedBatch = {
 	jobCount: number;
 	templateId: string | null;
 	caption: string | null;
+	igAccountId: string | null;
 	ownerUserId: string | null;
 };
 
@@ -64,6 +72,23 @@ export async function createBatch({
 }: {
 	input: CreateBatchInput;
 }): Promise<CreatedBatch> {
+	// Akun IG divalidasi SEBELUM baris apa pun ditulis.
+	if (input.igAccountId) {
+		const accounts = await db
+			.select({ status: klipIgAccounts.status })
+			.from(klipIgAccounts)
+			.where(eq(klipIgAccounts.id, input.igAccountId))
+			.limit(1);
+		const account = accounts[0];
+		if (!account) {
+			throw new Error(`akun IG ${input.igAccountId} tidak ada`);
+		}
+		if (account.status !== "active") {
+			throw new Error(
+				`akun IG ${input.igAccountId} berstatus ${account.status} - hubungkan ulang dulu`,
+			);
+		}
+	}
 	const id = newBatchRowId();
 	const total = input.entryNames.length;
 	await db.insert(klipBatches).values({
@@ -71,6 +96,7 @@ export async function createBatch({
 		ownerUserId: input.ownerUserId,
 		templateId: input.templateId,
 		caption: input.caption,
+		igAccountId: input.igAccountId,
 		source: input.source,
 		zipPath: input.zipPath,
 		zipBytes: input.zipBytes,
@@ -94,6 +120,7 @@ export async function createBatch({
 		jobCount: total,
 		templateId: input.templateId,
 		caption: input.caption,
+		igAccountId: input.igAccountId,
 		ownerUserId: input.ownerUserId,
 	};
 }

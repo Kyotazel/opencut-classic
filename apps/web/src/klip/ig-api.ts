@@ -324,10 +324,21 @@ async function pollContainer({
 	containerId,
 	token,
 	pollIntervalMs,
+	viaVideoUrl,
 }: {
 	containerId: string;
 	token: string;
 	pollIntervalMs: number;
+	/**
+	 * URL yang dipakai Meta untuk MENGUNDUH video, kalau container dibuat
+	 * lewat video_url. Dipakai hanya untuk pesan kesalahan.
+	 *
+	 * Kenapa perlu: Meta membalas {status_code:"ERROR", status:"ERROR"} tanpa
+	 * keterangan apa pun. Tanpa menyebut URL-nya, kesalahan yang paling sering
+	 * - URL tidak bisa diunduh dari internet - tidak bisa dibedakan dari video
+	 * yang memang tidak valid.
+	 */
+	viaVideoUrl: string | null;
 }): Promise<void> {
 	for (let i = 0; i < POLL_MAX_TRIES; i += 1) {
 		const rec = await igRequest({
@@ -339,7 +350,12 @@ async function pollContainer({
 		const code = strField({ rec: rec, name: "status_code" });
 		if (code === "FINISHED") return;
 		if (code === "ERROR") {
-			throw new Error(strField({ rec: rec, name: "status" }) ?? "Pemrosesan video gagal di Instagram");
+			const detail = strField({ rec: rec, name: "status" });
+			const sebab = detail && detail !== "ERROR" ? detail : "Instagram tidak memberi keterangan";
+			const sumber = viaVideoUrl
+				? ` Container ${containerId} dibuat dari video_url ${viaVideoUrl} - pastikan URL itu bisa diunduh dari internet dan menunjuk aplikasi ini (KLIP_PUBLIC_BASE_URL).`
+				: ` Container ${containerId} diunggah langsung (resumable).`;
+			throw new Error(`Instagram gagal memproses video: ${sebab}.${sumber}`);
 		}
 		await new Promise((r) => setTimeout(r, pollIntervalMs));
 	}
@@ -383,6 +399,9 @@ export async function publishReel(opts: PublishReelOpts): Promise<{
 	const pollIntervalMs = opts.pollIntervalMs ?? 5000;
 	opts.onStage?.("upload");
 	let containerId: string;
+	// Diisi kalau jalur video_url yang dipakai, supaya pesan kesalahan nanti
+	// bisa menyebut URL mana yang gagal.
+	let viaVideoUrl: string | null = null;
 	try {
 		const session = await createReelUploadSession({
 			igUserId: opts.igUserId,
@@ -410,9 +429,15 @@ export async function publishReel(opts: PublishReelOpts): Promise<{
 			caption: opts.caption,
 			videoUrl,
 		});
+		viaVideoUrl = videoUrl;
 	}
 	opts.onStage?.("processing");
-	await pollContainer({ containerId, token: opts.accessToken, pollIntervalMs });
+	await pollContainer({
+		containerId,
+		token: opts.accessToken,
+		pollIntervalMs,
+		viaVideoUrl,
+	});
 	const permalink = await publishContainer({
 		igUserId: opts.igUserId,
 		token: opts.accessToken,
