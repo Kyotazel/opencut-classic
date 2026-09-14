@@ -7,7 +7,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate } from "@/utils/date";
 
-type Progress = { queued: number; running: number; done: number; failed: number };
+type Progress = {
+	queued: number;
+	running: number;
+	done: number;
+	failed: number;
+};
 
 type BatchRow = {
 	id: string;
@@ -77,18 +82,28 @@ const STATUS_STYLE: Record<string, string> = {
  * Halaman ini sengaja menampilkan itu apa adanya supaya tidak terlihat
  * seperti aplikasi yang menggantung.
  */
+/** Status job yang boleh dijalankan ulang dari UI. */
+function isRetryable({ status }: { status: string }): boolean {
+	return status === "failed" || status === "cancelled";
+}
+
 export default function BatchesPage() {
 	const [batches, setBatches] = useState<BatchRow[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [openId, setOpenId] = useState<string | null>(null);
 	const [jobs, setJobs] = useState<JobRow[]>([]);
 	const [jobsLoading, setJobsLoading] = useState(false);
+	/** URL yang sedang diproses, supaya tombolnya bisa menampilkan status. */
+	const [retrying, setRetrying] = useState<string | null>(null);
 
 	const load = useCallback(async () => {
 		setError(null);
 		try {
 			const res = await fetch("/api/klip/batches", { cache: "no-store" });
-			const body = (await res.json()) as { batches?: BatchRow[]; error?: string };
+			const body = (await res.json()) as {
+				batches?: BatchRow[];
+				error?: string;
+			};
 			if (!res.ok) throw new Error(body.error ?? "Gagal memuat batch");
 			setBatches(body.batches ?? []);
 		} catch (e) {
@@ -101,6 +116,37 @@ export default function BatchesPage() {
 		void load();
 	}, [load]);
 
+	/**
+	 * Jalankan ulang job yang gagal. `fresh` = buang hasil render supaya
+	 * dirender ulang dari nol; tanpa itu job yang sudah punya berkas render
+	 * langsung masuk tahap publish.
+	 */
+	const retry = async ({
+		url,
+		fresh = false,
+		reloadJobs = false,
+	}: {
+		url: string;
+		fresh?: boolean;
+		reloadJobs?: boolean;
+	}) => {
+		setRetrying(url);
+		setError(null);
+		try {
+			const res = await fetch(fresh ? `${url}?fresh=1` : url, {
+				method: "POST",
+			});
+			const body = (await res.json()) as { error?: string; retried?: string[] };
+			if (!res.ok) throw new Error(body.error ?? "Gagal menjalankan ulang");
+			await load();
+			if (reloadJobs && openId) await toggle({ id: openId });
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "Gagal menjalankan ulang");
+		} finally {
+			setRetrying(null);
+		}
+	};
+
 	const toggle = async ({ id }: { id: string }) => {
 		if (openId === id) {
 			setOpenId(null);
@@ -109,7 +155,10 @@ export default function BatchesPage() {
 		setOpenId(id);
 		setJobsLoading(true);
 		try {
-			const res = await fetch(`/api/klip/batches?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+			const res = await fetch(
+				`/api/klip/batches?id=${encodeURIComponent(id)}`,
+				{ cache: "no-store" },
+			);
 			const body = (await res.json()) as { jobs?: JobRow[] };
 			setJobs(body.jobs ?? []);
 		} catch {
@@ -135,14 +184,18 @@ export default function BatchesPage() {
 						Muat ulang
 					</Button>
 					<Link href="/projects">
-						<Button variant="outline" size="sm">Kembali</Button>
+						<Button variant="outline" size="sm">
+							Kembali
+						</Button>
 					</Link>
 				</div>
 			</div>
 
 			{error && (
 				<Card>
-					<CardContent className="text-destructive p-4 text-sm">{error}</CardContent>
+					<CardContent className="text-destructive p-4 text-sm">
+						{error}
+					</CardContent>
 				</Card>
 			)}
 
@@ -157,7 +210,11 @@ export default function BatchesPage() {
 				<Card>
 					<CardContent className="text-muted-foreground p-6 text-sm">
 						Belum ada batch. Kembali ke halaman projects lalu klik
-						<span className="text-foreground font-medium"> &quot;Antrikan batch&quot;</span>.
+						<span className="text-foreground font-medium">
+							{" "}
+							&quot;Antrikan batch&quot;
+						</span>
+						.
 					</CardContent>
 				</Card>
 			)}
@@ -169,22 +226,50 @@ export default function BatchesPage() {
 							<div className="flex flex-wrap items-center justify-between gap-3">
 								<div className="flex flex-col gap-1">
 									<div className="flex items-center gap-2">
-										<span className="font-mono text-sm font-medium">{b.id}</span>
+										<span className="font-mono text-sm font-medium">
+											{b.id}
+										</span>
 										<span
 											className={`rounded-sm px-2 py-0.5 text-xs font-medium ${STATUS_STYLE[b.status] ?? STATUS_STYLE.queued}`}
 										>
 											{b.status}
 										</span>
-										<span className="text-muted-foreground text-xs">{b.source}</span>
+										<span className="text-muted-foreground text-xs">
+											{b.source}
+										</span>
 									</div>
 									<span className="text-muted-foreground text-xs">
 										{b.ownerUserId ?? "(tanpa pemilik)"} &middot;{" "}
 										{formatDate({ date: new Date(b.createdAt) })}
 									</span>
 								</div>
-								<Button variant="outline" size="sm" onClick={() => void toggle({ id: b.id })}>
-									{openId === b.id ? "Tutup" : "Lihat job"}
-								</Button>
+								<span className="flex items-center gap-2">
+									{b.progress.failed > 0 && (
+										<Button
+											variant="outline"
+											size="sm"
+											disabled={retrying !== null}
+											onClick={() =>
+												void retry({
+													url: `/api/klip/batches/${encodeURIComponent(b.id)}/retry-failed`,
+													reloadJobs: true,
+												})
+											}
+										>
+											{retrying ===
+											`/api/klip/batches/${encodeURIComponent(b.id)}/retry-failed`
+												? "Menjalankan..."
+												: `Ulangi ${b.progress.failed} yang gagal`}
+										</Button>
+									)}
+									<Button
+										variant="outline"
+										size="sm"
+										onClick={() => void toggle({ id: b.id })}
+									>
+										{openId === b.id ? "Tutup" : "Lihat job"}
+									</Button>
+								</span>
 							</div>
 
 							<div className="text-muted-foreground flex flex-wrap gap-4 text-xs">
@@ -197,7 +282,10 @@ export default function BatchesPage() {
 							</div>
 
 							{b.caption && (
-								<p className="text-muted-foreground truncate text-xs" title={b.caption}>
+								<p
+									className="text-muted-foreground truncate text-xs"
+									title={b.caption}
+								>
 									Caption: {b.caption}
 								</p>
 							)}
@@ -211,10 +299,14 @@ export default function BatchesPage() {
 							{openId === b.id && (
 								<div className="border-border overflow-hidden rounded-md border">
 									{jobsLoading && (
-										<p className="text-muted-foreground p-3 text-xs">Memuat job...</p>
+										<p className="text-muted-foreground p-3 text-xs">
+											Memuat job...
+										</p>
 									)}
 									{!jobsLoading && jobs.length === 0 && (
-										<p className="text-muted-foreground p-3 text-xs">Tidak ada job.</p>
+										<p className="text-muted-foreground p-3 text-xs">
+											Tidak ada job.
+										</p>
 									)}
 									{!jobsLoading &&
 										jobs.map((j) => (
@@ -222,18 +314,53 @@ export default function BatchesPage() {
 												key={j.id}
 												className="border-border flex items-start justify-between gap-3 border-b px-3 py-2 last:border-0"
 											>
-												<span className="truncate font-mono text-xs" title={j.entryName}>
+												<span
+													className="truncate font-mono text-xs"
+													title={j.entryName}
+												>
 													{j.entryName}
 												</span>
 												<span className="flex shrink-0 items-center gap-2">
-														{j.stage && STAGE_NOTE[j.stage] && (
-															<span
-																className="text-destructive text-xs"
-																title={j.error ?? undefined}
+													{isRetryable({ status: j.status }) && (
+														<>
+															<button
+																type="button"
+																disabled={retrying !== null}
+																onClick={() =>
+																	void retry({
+																		url: `/api/klip/batch-jobs/${encodeURIComponent(j.id)}/retry`,
+																		reloadJobs: true,
+																	})
+																}
+																className="text-xs font-medium text-amber-600 hover:underline disabled:opacity-50 dark:text-amber-400"
 															>
-																{STAGE_NOTE[j.stage]}
-															</span>
-														)}
+																Ulangi
+															</button>
+															<button
+																type="button"
+																disabled={retrying !== null}
+																title="Buang hasil render lalu render ulang dari nol"
+																onClick={() =>
+																	void retry({
+																		url: `/api/klip/batch-jobs/${encodeURIComponent(j.id)}/retry`,
+																		fresh: true,
+																		reloadJobs: true,
+																	})
+																}
+																className="text-muted-foreground text-xs font-medium hover:underline disabled:opacity-50"
+															>
+																Render ulang
+															</button>
+														</>
+													)}
+													{j.stage && STAGE_NOTE[j.stage] && (
+														<span
+															className="text-destructive text-xs"
+															title={j.error ?? undefined}
+														>
+															{STAGE_NOTE[j.stage]}
+														</span>
+													)}
 													{j.permalink && (
 														<a
 															href={j.permalink}

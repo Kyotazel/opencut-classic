@@ -1,4 +1,9 @@
-import { chromium, type Browser, type BrowserContext } from "playwright";
+import {
+	chromium,
+	type Browser,
+	type BrowserContext,
+	type Page,
+} from "playwright";
 
 /**
  * Klien Chromium untuk worker.
@@ -38,6 +43,70 @@ export type RenderProjectInput = {
  * worker menggantung selamanya kalau halaman benar-benar macet.
  */
 export const DEFAULT_JOB_TIMEOUT_MS = 30 * 60_000;
+
+/**
+ * Teruskan console, error halaman, dan permintaan yang gagal ke log worker.
+ *
+ * KENAPA INI ADA: kegagalan render hanya dilaporkan ke worker sebagai SATU
+ * baris pesan (`result.error`), sedangkan penjelasan lengkapnya - termasuk
+ * stack trace - hanya pernah ditulis ke console halaman, lalu ikut hilang saat
+ * halamannya ditutup. Akibatnya kegagalan seperti "network error" tidak bisa
+ * didiagnosis sama sekali: pesannya generik dan asalnya tidak diketahui.
+ *
+ * Dengan ini log pm2 menyimpan sebab yang sebenarnya, dan permintaan HTTP yang
+ * gagal (mis. pengambilan video atau unggahan hasil) ikut tercatat berikut kode
+ * kesalahannya - bukan cuma gejalanya.
+ */
+function forwardPageDiagnostics({
+	page,
+	label,
+}: {
+	page: Page;
+	label: string;
+}): void {
+	page.on("console", (message) => {
+		const type = message.type();
+		if (type !== "error" && type !== "warning") return;
+		void Promise.all(
+			message.args().map((arg) =>
+				arg
+					.evaluate((value: unknown) => {
+						if (value instanceof Error) {
+							return `${value.name}: ${value.message}\n${value.stack ?? ""}`;
+						}
+						if (typeof value === "string") return value;
+						try {
+							return JSON.stringify(value);
+						} catch {
+							return String(value);
+						}
+					})
+					.catch(() => "<argumen tidak terbaca>"),
+			),
+		)
+			.then((parts) => {
+				console.error(`[chromium:${type}] ${label} ${parts.join(" ")}`);
+			})
+			.catch(() => {
+				// Diagnostik tidak boleh menjatuhkan job.
+			});
+	});
+
+	page.on("pageerror", (error) => {
+		console.error(
+			`[chromium:pageerror] ${label} ${error.name}: ${error.message}\n${error.stack ?? ""}`,
+		);
+	});
+
+	page.on("requestfailed", (request) => {
+		const failure = request.failure()?.errorText ?? "tidak diketahui";
+		// ERR_ABORTED muncul wajar saat halaman ditutup; bukan kegagalan nyata.
+		if (failure.includes("ERR_ABORTED")) return;
+		console.error(
+			`[chromium:requestfailed] ${label} ${request.method()} ${request.url()} - ${failure}`,
+		);
+	});
+}
 
 /**
  * Sesi Chromium yang dipakai ulang antar job.
@@ -119,6 +188,7 @@ export class ChromiumRunner {
 	}): Promise<string> {
 		const context = await this.ensureSession();
 		const page = await context.newPage();
+		forwardPageDiagnostics({ page, label: input.jobId });
 		try {
 			const query = new URLSearchParams({
 				ref: input.opencutRef,

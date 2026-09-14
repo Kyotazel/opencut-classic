@@ -13,6 +13,14 @@ import { resolveBatchSettings } from "@/klip/settings";
 
 export const WORKER_ID = `worker-${randomUUID().slice(0, 8)}`;
 
+/**
+ * Tahap yang dianggap "kegagalan yang butuh perhatian manusia".
+ *
+ * publish_rate_limited sengaja TIDAK ada di sini: kena batas laju Instagram
+ * bukan tanda ada yang salah, hanya perlu ditunggu.
+ */
+const FAILURE_STAGES = new Set(["publish_failed", "render_failed"]);
+
 export type ClaimedJob = {
 	id: string;
 	batchId: string;
@@ -179,7 +187,7 @@ async function opencutRefForProject({
 	return rows[0]?.opencutRef ?? null;
 }
 
-type RenderState = { renderedPath: string | null };
+type RenderState = { renderedPath: string | null; stage: string | null };
 
 export type ProcessResult =
 	| { kind: "rendered"; projectId: string; video: string; note?: string }
@@ -187,19 +195,42 @@ export type ProcessResult =
 	| { kind: "skipped"; reason: string }
 	| { kind: "failed"; error: string };
 
+type ProcessJobArgs = {
+	job: ClaimedJob;
+	runner: ChromiumRunner;
+	baseUrl: string;
+};
+
+/**
+ * Kerjakan satu job, dan pastikan SETIAP kegagalan meninggalkan jejak tahap.
+ *
+ * KENAPA DIBUNGKUS: circuit breaker hanya bisa menghitung kegagalan kalau
+ * tahapnya tertulis di kolom `stage`. Kegagalan publish menulis tahapnya
+ * sendiri dari dalam publishStage; kegagalan RENDER tidak menulis apa pun,
+ * sehingga batch yang render-nya rusak secara sistemik akan mengerjakan semua
+ * video sampai percobaannya habis tanpa pernah berhenti - ratusan video kali
+ * lima percobaan, berjam-jam, untuk hasil nol.
+ */
+export async function processJob(args: ProcessJobArgs): Promise<ProcessResult> {
+	try {
+		return await runJob(args);
+	} catch (error) {
+		const state = await renderStateForJob({ jobId: args.job.id });
+		// Tahap publish punya penandanya sendiri (publish_failed /
+		// publish_rate_limited) dan breaker-nya sudah dipanggil di sana.
+		if (!state.stage?.startsWith("publish")) {
+			await setJob({ id: args.job.id, values: { stage: "render_failed" } });
+			await maybeHaltBatch({ batchId: args.job.batchId, rateLimited: false });
+		}
+		throw error;
+	}
+}
+
 /**
  * Kerjakan satu job: ekstrak ZIP, lalu suruh Chromium membuat project dan
  * menempelkan template memakai kode editor yang sama dengan UI.
  */
-export async function processJob({
-	job,
-	runner,
-	baseUrl,
-}: {
-	job: ClaimedJob;
-	runner: ChromiumRunner;
-	baseUrl: string;
-}): Promise<ProcessResult> {
+async function runJob({ job, runner, baseUrl }: ProcessJobArgs): Promise<ProcessResult> {
 	const batches = await db
 		.select()
 		.from(klipBatches)
@@ -304,11 +335,14 @@ export async function processJob({
 /** Berkas hasil render milik job, kalau sudah ada. */
 async function renderStateForJob({ jobId }: { jobId: string }): Promise<RenderState> {
 	const rows = await db
-		.select({ renderedPath: klipBatchJobs.renderedPath })
+		.select({ renderedPath: klipBatchJobs.renderedPath, stage: klipBatchJobs.stage })
 		.from(klipBatchJobs)
 		.where(eq(klipBatchJobs.id, jobId))
 		.limit(1);
-	return { renderedPath: rows[0]?.renderedPath ?? null };
+	return {
+		renderedPath: rows[0]?.renderedPath ?? null,
+		stage: rows[0]?.stage ?? null,
+	};
 }
 
 /**
@@ -443,7 +477,9 @@ export async function maybeHaltBatch({
 		.where(eq(klipBatchJobs.batchId, batchId))
 		.orderBy(desc(klipBatchJobs.updatedAt))
 		.limit(threshold + 4);
-	const failures = recent.filter((r) => r.stage === "publish_failed");
+	const failures = recent.filter(
+		(r) => r.stage !== null && FAILURE_STAGES.has(r.stage),
+	);
 	if (failures.length < threshold) return;
 
 	await db
