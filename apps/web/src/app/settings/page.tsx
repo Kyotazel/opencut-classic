@@ -32,6 +32,22 @@ export default function SettingsPage() {
 	const [templateId, setTemplateId] = useState(TIDAK_DIATUR);
 	const [igAccountId, setIgAccountId] = useState(TIDAK_DIATUR);
 	const [ambang, setAmbang] = useState("2");
+	/**
+	 * Nilai yang sedang tersimpan di server, untuk membandingkan saat menyimpan.
+	 *
+	 * KENAPA PERLU: tombol Simpan dulu mengirim KETIGA nilai tanpa syarat. Kalau
+	 * salah satu <Select> gagal menampilkan nilai tersimpan - misalnya id-nya
+	 * tidak ada lagi di daftar pilihan - nilainya menjadi kosong, dan menekan
+	 * Simpan akan MENGHAPUS setelan itu tanpa peringatan apa pun.
+	 *
+	 * Dengan membandingkan, menekan Simpan tanpa mengubah apa pun tidak menulis
+	 * apa-apa. Perubahan hanya terjadi kalau kamu memang mengubahnya.
+	 */
+	const [tersimpan, setTersimpan] = useState<{
+		template: string;
+		ig: string;
+		ambang: string;
+	} | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [menyimpan, setMenyimpan] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -54,9 +70,13 @@ export default function SettingsPage() {
 			if (!res.ok) throw new Error(body.error ?? "Gagal memuat setelan");
 			setTemplates(body.templates ?? []);
 			setAccounts(body.accounts ?? []);
-			setTemplateId(body.settings?.defaultTemplateId || TIDAK_DIATUR);
-			setIgAccountId(body.settings?.defaultIgAccountId || TIDAK_DIATUR);
-			setAmbang(body.settings?.publishFailureThreshold ?? "2");
+			const tpl = body.settings?.defaultTemplateId || TIDAK_DIATUR;
+			const ig = body.settings?.defaultIgAccountId || TIDAK_DIATUR;
+			const amb = body.settings?.publishFailureThreshold ?? "2";
+			setTemplateId(tpl);
+			setIgAccountId(ig);
+			setAmbang(amb);
+			setTersimpan({ template: tpl, ig, ambang: amb });
 		} catch (e) {
 			setError(e instanceof Error ? e.message : "Gagal memuat setelan");
 		} finally {
@@ -73,17 +93,34 @@ export default function SettingsPage() {
 		setError(null);
 		setPesan(null);
 		try {
+			// Hanya key yang BERUBAH yang dikirim. Menekan Simpan tanpa mengubah
+			// apa pun jadi tidak menulis apa-apa - jadi nilai yang gagal tampil
+			// di salah satu pilihan tidak pernah menghapus setelan tersimpan.
+			const patch: Record<string, string> = {};
+			if (!tersimpan || templateId !== tersimpan.template) {
+				patch.default_template_id =
+					templateId === TIDAK_DIATUR ? "" : templateId;
+			}
+			if (!tersimpan || igAccountId !== tersimpan.ig) {
+				patch.default_ig_account_id =
+					igAccountId === TIDAK_DIATUR ? "" : igAccountId;
+			}
+			if (!tersimpan || ambang !== tersimpan.ambang) {
+				patch.publish_failure_threshold = ambang;
+			}
+			if (Object.keys(patch).length === 0) {
+				setPesan("Tidak ada perubahan.");
+				return;
+			}
 			const res = await fetch("/api/klip/settings", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					default_template_id: templateId === TIDAK_DIATUR ? "" : templateId,
-					default_ig_account_id: igAccountId === TIDAK_DIATUR ? "" : igAccountId,
-					publish_failure_threshold: ambang,
-				}),
+				body: JSON.stringify(patch),
 			});
 			const body = (await res.json()) as { error?: string };
 			if (!res.ok) throw new Error(body.error ?? "Gagal menyimpan");
+			// Muat ulang supaya nilai acuan ikut diperbarui.
+			await load();
 			setPesan("Setelan tersimpan.");
 		} catch (e) {
 			setError(e instanceof Error ? e.message : "Gagal menyimpan");
