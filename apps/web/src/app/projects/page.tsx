@@ -205,6 +205,11 @@ function ProjectsHeader() {
 							<span className="text-sm font-medium hidden md:block">Instagram</span>
 						</Button>
 					</Link>
+					<Link href="/settings">
+						<Button variant="outline" size="sm">
+							<span className="text-sm font-medium hidden md:block">Setelan</span>
+						</Button>
+					</Link>
 					<SyncUploadButton />
 					<LogoutButton />
 					<NewProjectButton />
