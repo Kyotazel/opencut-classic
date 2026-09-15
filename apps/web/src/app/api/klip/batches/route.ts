@@ -7,6 +7,13 @@ import { listBatches, summarizeJobs } from "@/klip/batch-query";
 import { dataRoot, UploadError } from "@/klip/upload";
 import { MAX_CAPTION_LENGTH } from "@/klip/ig-publish";
 import { bacaStatusKuota } from "@/klip/ig-quota-status";
+import { sendTelegram } from "@/klip/alerts";
+import { pesanBatchDiterima } from "@/klip/worker/notify";
+import {
+	SIGNATURE_HEADER,
+	signatureMatches,
+	signatureRequired,
+} from "@/klip/webhook-signature";
 
 /**
  * POST /api/klip/batches — catat batch, JANGAN kerjakan (Tahap 1).
@@ -200,6 +207,25 @@ export async function POST(request: NextRequest) {
 			{ status: 413 },
 		);
 	}
+	// Tanda tangan diperiksa SETELAH byte-nya terbaca: HMAC menutupi isi berkas,
+	// jadi tidak ada cara memverifikasi tanpa membacanya lebih dulu. Unggahan
+	// dari UI tidak menandatangani apa pun dan tetap diterima selama
+	// KLIP_WEBHOOK_SECRET belum diisi - lihat catatan di webhook-signature.ts.
+	const bytes = Buffer.from(await file.arrayBuffer());
+	if (signatureRequired()) {
+		const header = request.headers.get(SIGNATURE_HEADER);
+		if (!signatureMatches({ body: bytes, header })) {
+			return NextResponse.json(
+				{
+					error: header
+						? "Invalid signature"
+						: "Missing X-OpenShorts-Signature header",
+				},
+				{ status: 401 },
+			);
+		}
+	}
+
 	const rawTemplate = form.get("templateId");
 	const templateId =
 		typeof rawTemplate === "string" && rawTemplate.trim() ? rawTemplate.trim() : null;
@@ -218,7 +244,7 @@ export async function POST(request: NextRequest) {
 	const ownerUserId = requireOwner();
 	if (!ownerUserId) return noOwnerResponse();
 	return await persist({
-		bytes: Buffer.from(await file.arrayBuffer()),
+		bytes,
 		filename: file.name,
 		templateId,
 		caption,
@@ -264,6 +290,15 @@ async function persist({
 				ownerUserId,
 			},
 		});
+		// Dikirim tanpa di-await: notifikasi tidak boleh menahan respons 202,
+		// dan kegagalannya tidak boleh menggagalkan batch yang sudah tercatat.
+		void sendTelegram(
+			pesanBatchDiterima({
+				jobCount: created.jobCount,
+				sumber: source === "api" ? "OpenShorts" : null,
+				sudahAda: 0,
+			}),
+		);
 		return NextResponse.json(
 			{
 				batchId: created.id,
