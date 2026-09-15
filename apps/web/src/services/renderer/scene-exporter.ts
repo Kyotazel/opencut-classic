@@ -44,6 +44,39 @@ export type SceneExporterEvents = {
 	cancelled: [];
 };
 
+/**
+ * Bungkus kegagalan dengan keterangan tahap, nomor frame, dan detiknya.
+ *
+ * Penyebab aslinya dibawa lewat `cause`, jadi stack-nya tetap ada - sedangkan
+ * pesannya sekarang menjawab "di mana", bukan cuma "apa".
+ */
+function petakanKegagalan({
+	error,
+	tahap,
+	frame,
+	detik,
+	totalFrame,
+}: {
+	error: unknown;
+	tahap: string;
+	frame: number | null;
+	detik: number | null;
+	totalFrame: number;
+}): Error {
+	const asli = error instanceof Error ? error.message : String(error);
+	const posisi =
+		frame === null
+			? ""
+			: ` (frame ${frame}/${totalFrame}, detik ${(detik ?? 0).toFixed(2)})`;
+	const dibungkus = new Error(`render gagal saat ${tahap}${posisi}: ${asli}`, {
+		cause: error,
+	});
+	if (error instanceof Error && error.stack) {
+		dibungkus.stack = `${dibungkus.stack ?? ""}\n--- dari ${tahap} ---\n${error.stack}`;
+	}
+	return dibungkus;
+}
+
 export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 	private renderer: CanvasRenderer;
 	private format: ExportFormat;
@@ -130,8 +163,18 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		await output.start();
 
 		if (audioSource && this.audioBuffer) {
-			await audioSource.add(this.audioBuffer);
-			audioSource.close();
+			try {
+				await audioSource.add(this.audioBuffer);
+				audioSource.close();
+			} catch (error) {
+				throw petakanKegagalan({
+					error,
+					tahap: "menyandikan audio",
+					frame: null,
+					detik: null,
+					totalFrame: frameCount,
+				});
+			}
 		}
 
 		for (let i = 0; i < frameCount; i++) {
@@ -143,8 +186,34 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 
 			const timeTicks = i * ticksPerFrame;
 			const timeSeconds = mediaTimeToSeconds({ time: timeTicks });
-			await this.renderer.render({ node: rootNode, time: timeTicks });
-			await videoSource.add(timeSeconds, 1 / fpsFloat);
+			// Kegagalan dipetakan per operasi dan per frame.
+			//
+			// KENAPA: kegagalan di sini muncul sebagai pesan generik dari
+			// browser ("network error") tanpa stack dan tanpa petunjuk bagian
+			// mana yang rusak. Sebelum ini satu-satunya cara menebak adalah
+			// menjalankan ulang render 12 menit berulang kali.
+			try {
+				await this.renderer.render({ node: rootNode, time: timeTicks });
+			} catch (error) {
+				throw petakanKegagalan({
+					error,
+					tahap: "menggambar frame",
+					frame: i,
+					detik: timeSeconds,
+					totalFrame: frameCount,
+				});
+			}
+			try {
+				await videoSource.add(timeSeconds, 1 / fpsFloat);
+			} catch (error) {
+				throw petakanKegagalan({
+					error,
+					tahap: "menyandikan frame",
+					frame: i,
+					detik: timeSeconds,
+					totalFrame: frameCount,
+				});
+			}
 
 			this.emit("progress", i / frameCount);
 		}
@@ -156,7 +225,17 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		}
 
 		videoSource.close();
-		await output.finalize();
+		try {
+			await output.finalize();
+		} catch (error) {
+			throw petakanKegagalan({
+				error,
+				tahap: "menutup berkas",
+				frame: null,
+				detik: null,
+				totalFrame: frameCount,
+			});
+		}
 		this.emit("progress", 1);
 
 		const buffer = output.target.buffer;
