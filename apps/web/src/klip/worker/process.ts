@@ -7,7 +7,7 @@ import { resolveOrCreateProject } from "@/klip/brand";
 import { applyTemplate } from "@/klip/templates";
 import { dataRoot } from "@/klip/upload";
 import { ChromiumRunner } from "@/klip/worker/chromium";
-import { extractVideosFromZip } from "@/klip/worker/extract";
+import { captionFromZip, extractVideosFromZip } from "@/klip/worker/extract";
 import { isRateLimitError, publishRenderedVideo } from "@/klip/worker/publish";
 import { resolveBatchSettings } from "@/klip/settings";
 import { bersihkanStatusKuota } from "@/klip/ig-quota-status";
@@ -251,6 +251,13 @@ async function runJob({ job, runner, baseUrl }: ProcessJobArgs): Promise<Process
 			batch,
 			projectId: job.projectId,
 			renderedPath: existing.renderedPath,
+			// Jalur resume: video sudah tidak diekstrak ulang, jadi caption dibaca
+			// langsung dari ZIP. ZIP-nya memang masih ada di disk (dijaga janitor
+			// terpisah), jadi tidak perlu kolom database baru hanya untuk ini.
+			videoCaption: await captionFromZip({
+				zipAbsPath: path.join(dataRoot(), batch.zipPath),
+				entryName: job.entryName,
+			}),
 		});
 	}
 
@@ -330,6 +337,7 @@ async function runJob({ job, runner, baseUrl }: ProcessJobArgs): Promise<Process
 		batch,
 		projectId: project.id,
 		renderedPath: fresh.renderedPath,
+		videoCaption: video.caption?.instagram ?? null,
 	});
 }
 
@@ -357,11 +365,21 @@ async function publishStage({
 	batch,
 	projectId,
 	renderedPath,
+	videoCaption,
 }: {
 	job: ClaimedJob;
 	batch: typeof klipBatches.$inferSelect;
 	projectId: string;
 	renderedPath: string;
+	/**
+	 * Caption khusus video ini dari captions.json, kalau ada.
+	 *
+	 * Diteruskan sebagai parameter, bukan dibaca ulang di sini: publishStage
+	 * juga dipanggil dari jalur RESUME (job yang sudah ter-render lalu dicoba
+	 * ulang), dan di jalur itu video sudah tidak ada lagi di disk. Membaca
+	 * ulang di sini akan membuat caption hilang tepat pada percobaan ulang.
+	 */
+	videoCaption: string | null;
 }): Promise<ProcessResult> {
 	const settings = await resolveBatchSettings();
 	const igAccountId = batch.igAccountId ?? settings.defaultIgAccountId;
@@ -388,10 +406,18 @@ async function publishStage({
 	}
 
 	await setJob({ id: job.id, values: { status: "publishing", stage: "publishing" } });
+	// Caption per-video dari captions.json MENANG atas caption batch.
+	//
+	// Kenapa berurutan begini: caption batch adalah cara lama (satu caption untuk
+	// seluruh upload) dan masih dipakai saat ZIP diunggah manual dari UI - jadi
+	// ia tidak boleh dihapus. Tapi saat ZIP datang dari OpenShorts, tiap klip
+	// sudah punya captionnya sendiri yang lebih relevan, dan membuangnya berarti
+	// semua video tayang dengan teks yang sama.
+	const caption = videoCaption?.trim() || batch.caption || null;
 	const outcome = await publishRenderedVideo({
 		projectId,
 		renderedPath,
-		caption: batch.caption ?? null,
+		caption,
 		igAccountId,
 	});
 

@@ -3,6 +3,11 @@ import path from "node:path";
 import yauzl from "yauzl";
 import { sanitizeZipEntryName, MAX_BATCH_FILE_BYTES } from "@/klip/batch-upload";
 import { dataRoot, probeVideo, ACCEPTED_VIDEO_EXTS } from "@/klip/upload";
+import {
+	type ClipCaption,
+	captionForEntry,
+	parseCaptions,
+} from "@/klip/worker/captions";
 
 /** Video hasil ekstraksi: sudah di disk dan sudah diukur. */
 export type ExtractedVideo = {
@@ -12,6 +17,11 @@ export type ExtractedVideo = {
 	width: number | null;
 	height: number | null;
 	duration: number | null;
+	/**
+	 * Caption dari captions.json, kalau ada. null = pakai caption batch.
+	 * Dipasangkan lewat nomor di nama file, bukan urutan - lihat captions.ts.
+	 */
+	caption: ClipCaption | null;
 };
 
 export type ExtractResult = {
@@ -71,6 +81,10 @@ export async function extractVideosFromZip({
 	await mkdir(outDir, { recursive: true });
 	const videos: ExtractedVideo[] = [];
 	const skipped: Array<{ entryName: string; reason: string }> = [];
+	// Isi captions.json ditahan dulu, bukan dipakai langsung: yauzl membaca entri
+	// satu per satu secara berurutan, dan captions.json bisa berada SETELAH
+	// videonya di dalam ZIP. Kalau dipakai saat itu juga, caption akan kosong.
+	let captionsRaw: string | null = null;
 
 	try {
 		await new Promise<void>((resolve, reject) => {
@@ -90,6 +104,16 @@ export async function extractVideosFromZip({
 							return;
 						}
 						const ext = extOf(name);
+						// captions.json BUKAN sampah: ia memuat caption per video.
+						// Dicek sebelum filter ekstensi, karena .json pasti akan
+						// ditolak sebagai "not a video".
+						if (name.toLowerCase() === "captions.json") {
+							if (entry.uncompressedSize <= MAX_BATCH_FILE_BYTES) {
+								captionsRaw = (await readEntry({ zip, entry })).toString("utf8");
+							}
+							zip.readEntry();
+							return;
+						}
 						if (!ACCEPTED_VIDEO_EXTS.has(ext)) {
 							skipped.push({ entryName: name, reason: `not a video (${ext || "no ext"})` });
 							zip.readEntry();
@@ -112,6 +136,8 @@ export async function extractVideosFromZip({
 							width: probed.width,
 							height: probed.height,
 							duration: probed.duration,
+							// Dipasangkan setelah seluruh ZIP selesai dibaca.
+							caption: null,
 						});
 						zip.readEntry();
 					} catch (error) {
@@ -124,5 +150,79 @@ export async function extractVideosFromZip({
 	} finally {
 		zip.close();
 	}
+
+	// Pemasangan caption dilakukan SETELAH seluruh ZIP terbaca: captions.json
+	// bisa muncul setelah videonya, dan mencocokkan sambil jalan akan menghasilkan
+	// caption kosong secara acak tergantung urutan entri di ZIP.
+	if (captionsRaw) {
+		const captions = parseCaptions(captionsRaw);
+		for (const video of videos) {
+			video.caption = captionForEntry(video.entryName, captions);
+		}
+	}
+
 	return { videos, skipped };
+}
+
+/**
+ * Caption untuk satu entri, tanpa mengekstrak video apa pun.
+ *
+ * Dipakai jalur RESUME: job yang sudah ter-render lalu dicoba ulang tidak
+ * mengekstrak ulang (itu pemborosan), jadi caption tidak tersedia dari hasil
+ * ekstraksi. Membaca hanya captions.json jauh lebih murah daripada mengekstrak
+ * ulang seluruh ZIP yang bisa ratusan MB.
+ *
+ * Tidak pernah melempar: caption hilang jauh lebih ringan daripada job gagal
+ * dan tidak pernah tayang.
+ */
+export async function captionFromZip({
+	zipAbsPath,
+	entryName,
+}: {
+	zipAbsPath: string;
+	entryName: string;
+}): Promise<string | null> {
+	let zip: yauzl.ZipFile;
+	try {
+		zip = await openZip({ absPath: zipAbsPath });
+	} catch {
+		return null;
+	}
+	let raw: string | null = null;
+	try {
+		await new Promise<void>((resolve, reject) => {
+			zip.on("error", reject);
+			zip.on("end", () => resolve());
+			zip.on("entry", (entry: yauzl.Entry) => {
+				void (async () => {
+					try {
+						const name = sanitizeZipEntryName({ fileName: entry.fileName });
+						if (name?.toLowerCase() === "captions.json") {
+							if (entry.uncompressedSize <= MAX_BATCH_FILE_BYTES) {
+								raw = (await readEntry({ zip, entry })).toString("utf8");
+							}
+							// Ketemu: tidak perlu membaca entri sisanya.
+							zip.close();
+							resolve();
+							return;
+						}
+						zip.readEntry();
+					} catch (error) {
+						reject(error);
+					}
+				})();
+			});
+			zip.readEntry();
+		});
+	} catch {
+		return null;
+	} finally {
+		try {
+			zip.close();
+		} catch {
+			// Sudah tertutup di jalur "ketemu" di atas.
+		}
+	}
+	if (!raw) return null;
+	return captionForEntry(entryName, parseCaptions(raw))?.instagram ?? null;
 }
