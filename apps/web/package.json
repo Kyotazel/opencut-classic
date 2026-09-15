@@ -23,7 +23,8 @@
     "worker:now": "bun run worker.ts --drain --now",
     "klip:setting": "bun run scripts/klip-settings.ts",
     "klip:queue": "bun --env-file=.env.local run scripts/klip-queue.ts",
-    "klip:hapus-batch": "bun --env-file=.env.local run scripts/klip-hapus-batch.ts"
+    "klip:hapus-batch": "bun --env-file=.env.local run scripts/klip-hapus-batch.ts",
+    "klip:telegram-test": "bun --env-file=.env.local run scripts/klip-telegram-test.ts"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",
