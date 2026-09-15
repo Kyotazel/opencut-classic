@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE, verifySession } from "@/klip/auth-session";
+import { SIGNATURE_HEADER, bolehLewatLogin } from "@/klip/machine-auth";
 import { absoluteUrl } from "@/utils/url";
 
 export const config = {
@@ -32,6 +33,17 @@ export async function middleware(request: NextRequest) {
 		return NextResponse.redirect(
 			absoluteUrl({ path: "/", requestUrl: request.url }),
 		);
+	}
+	// Pengirim mesin (OpenShorts) membawa tanda tangan, bukan cookie. Aturannya
+	// ada di machine-auth.ts supaya bisa diuji tanpa menjalankan Edge runtime.
+	if (
+		bolehLewatLogin({
+			pathname,
+			header: request.headers.get(SIGNATURE_HEADER),
+			secret: process.env.KLIP_WEBHOOK_SECRET,
+		})
+	) {
+		return NextResponse.next();
 	}
 	if (await hasSession({ request })) return NextResponse.next();
 	if (pathname.startsWith("/api/")) {

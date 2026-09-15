@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { clamp, sendTelegram, telegramConfigured } from "@/klip/alerts";
 
 /**
@@ -9,19 +9,29 @@ import { clamp, sendTelegram, telegramConfigured } from "@/klip/alerts";
  * BERHASIL ke Instagram akan dianggap gagal hanya karena pesan Telegram-nya
  * tidak terkirim - lalu job di-retry dan video ter-posting dua kali.
  */
-const ENV_KEYS = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"] as const;
-const saved: Record<string, string | undefined> = {};
-
+const ENV_KEYS = [
+	"TELEGRAM_BOT_TOKEN",
+	"TELEGRAM_CHAT_ID",
+	"TELEGRAM_DISABLED",
+] as const;
 const TELEGRAM_MAX = 4096;
 
-beforeEach(() => {
-	for (const k of ENV_KEYS) saved[k] = process.env[k];
-});
+/**
+ * Nilai asli env, diambil SEKALI saat modul dimuat.
+ *
+ * KENAPA BUKAN DI beforeEach: kalau snapshot diambil sebelum tiap tes, ia
+ * menyalin env yang sudah dimodifikasi tes SEBELUMNYA - sehingga satu tes yang
+ * lupa membersihkan akan merembet ke semua tes berikutnya, dan kegagalannya
+ * muncul di tempat yang salah. Snapshot sekali di sini membuat setiap tes
+ * selalu dimulai dari keadaan asli.
+ */
+const ASLI: Record<string, string | undefined> = {};
+for (const k of ENV_KEYS) ASLI[k] = process.env[k];
 
 afterEach(() => {
 	for (const k of ENV_KEYS) {
-		if (saved[k] === undefined) delete process.env[k];
-		else process.env[k] = saved[k];
+		if (ASLI[k] === undefined) delete process.env[k];
+		else process.env[k] = ASLI[k];
 	}
 });
 
@@ -55,8 +65,50 @@ describe("clamp", () => {
 	});
 });
 
+describe("sakelar mati TELEGRAM_DISABLED", () => {
+	test("token LENGKAP tapi sakelar nyala -> tidak dikonfigurasi", () => {
+		// Ini yang mencegah uji-uji otomatis membanjiri chat Telegram nyata.
+		// Sengaja diuji dengan token yang TERISI: kalau tokennya kosong,
+		// telegramConfigured() sudah false dan tesnya tidak membuktikan apa pun.
+		process.env.TELEGRAM_BOT_TOKEN = "123:token-asli-palsu";
+		process.env.TELEGRAM_CHAT_ID = "-100";
+		process.env.TELEGRAM_DISABLED = "1";
+		expect(telegramConfigured()).toBe(false);
+	});
+
+	test("semua bentuk penulisan benar dikenali", () => {
+		process.env.TELEGRAM_BOT_TOKEN = "123:token";
+		process.env.TELEGRAM_CHAT_ID = "-100";
+		for (const v of ["1", "true", "TRUE", "yes", "Yes", " true "]) {
+			process.env.TELEGRAM_DISABLED = v;
+			expect(telegramConfigured()).toBe(false);
+		}
+	});
+
+	test("sakelar mati -> configure tetap true (token tetap dianggap ada)", () => {
+		process.env.TELEGRAM_BOT_TOKEN = "123:token";
+		process.env.TELEGRAM_CHAT_ID = "-100";
+		for (const v of ["", "0", "false", "no"]) {
+			process.env.TELEGRAM_DISABLED = v;
+			expect(telegramConfigured()).toBe(true);
+		}
+	});
+
+	test("sakelar nyala -> sendTelegram mengembalikan false tanpa menghubungi jaringan", async () => {
+		process.env.TELEGRAM_BOT_TOKEN = "123:token";
+		process.env.TELEGRAM_CHAT_ID = "-100";
+		process.env.TELEGRAM_DISABLED = "1";
+		const mulai = Date.now();
+		expect(await sendTelegram("tidak boleh terkirim")).toBe(false);
+		// Tidak ada panggilan jaringan berarti selesai hampir seketika. Kalau
+		// ini lambat, berarti ia benar-benar menghubungi Telegram.
+		expect(Date.now() - mulai).toBeLessThan(200);
+	});
+});
+
 describe("sendTelegram", () => {
 	test("env kosong -> no-op, bukan error", async () => {
+		delete process.env.TELEGRAM_DISABLED;
 		delete process.env.TELEGRAM_BOT_TOKEN;
 		delete process.env.TELEGRAM_CHAT_ID;
 		expect(telegramConfigured()).toBe(false);
@@ -72,6 +124,12 @@ describe("sendTelegram", () => {
 	});
 
 	test("token salah -> false, TIDAK melempar", async () => {
+		// Sakelar dimatikan EKSPLISIT supaya tes ini benar-benar menguji jalur
+		// jaringan (permintaan ke Telegram, ditolak 401) dan bukan kebetulan
+		// lolos karena .env.local mematikan notifikasi.
+		//
+		// Tokennya sengaja palsu: tes ini TIDAK PERNAH mengirim pesan sungguhan.
+		delete process.env.TELEGRAM_DISABLED;
 		process.env.TELEGRAM_BOT_TOKEN = "123456:TOKEN_PALSU";
 		process.env.TELEGRAM_CHAT_ID = "-100";
 		expect(telegramConfigured()).toBe(true);
@@ -80,6 +138,7 @@ describe("sendTelegram", () => {
 	});
 
 	test("pesan sangat panjang tetap tidak melempar", async () => {
+		delete process.env.TELEGRAM_DISABLED;
 		process.env.TELEGRAM_BOT_TOKEN = "123456:TOKEN_PALSU";
 		process.env.TELEGRAM_CHAT_ID = "-100";
 		expect(await sendTelegram("x".repeat(50000))).toBe(false);

@@ -35,8 +35,31 @@ function chatId(): string {
 	return process.env.TELEGRAM_CHAT_ID?.trim() ?? "";
 }
 
-/** True kalau kedua env terisi. Dipakai untuk melewati kerja yang tidak perlu. */
+/**
+ * Sakelar mati notifikasi. "1"/"true"/"yes" berarti notifikasi DIMATIKAN.
+ *
+ * KENAPA ADA: setiap uji yang mengirim ZIP lewat endpoint sungguhan akan
+ * memicu pesan "Batch diterima" ke chat Telegram yang nyata. Saat menguji
+ * berulang kali, chat admin penuh dengan pesan uji - dan pesan sungguhan
+ * tenggelam di antaranya.
+ *
+ * Dipakai dengan menyalakan variabel ini selama pengujian, lalu mematikannya
+ * kembali. Tidak menggantikan env token: kalau token kosong, semuanya sudah
+ * tidak mengirim apa pun.
+ */
+function telegramDimatikan(): boolean {
+	const raw = process.env.TELEGRAM_DISABLED?.trim().toLowerCase() ?? "";
+	return raw === "1" || raw === "true" || raw === "yes";
+}
+
+/**
+ * True kalau notifikasi akan benar-benar dikirim.
+ *
+ * Dipakai untuk melewati kerja yang tidak perlu. Dua syarat: env terisi DAN
+ * sakelar mati tidak dinyalakan.
+ */
 export function telegramConfigured(): boolean {
+	if (telegramDimatikan()) return false;
 	return Boolean(token() && chatId());
 }
 
@@ -62,6 +85,11 @@ export function clamp(text: string): string {
  * dikonfigurasi). Pemanggil boleh mengabaikan hasilnya - itu memang tujuannya.
  */
 export async function sendTelegram(text: string): Promise<boolean> {
+	if (telegramDimatikan()) {
+		// Dicatat supaya "kenapa tidak ada notifikasi?" tidak jadi misteri.
+		console.log("[telegram] dimatikan (TELEGRAM_DISABLED) - pesan tidak dikirim");
+		return false;
+	}
 	if (!telegramConfigured()) return false;
 	try {
 		const resp = await fetch(`${API_BASE}/bot${token()}/sendMessage`, {
