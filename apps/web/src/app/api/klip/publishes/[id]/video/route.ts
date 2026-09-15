@@ -67,5 +67,14 @@ export async function GET(
 		});
 	}
 
-	return new Response(new Uint8Array(buf), { headers: dasar });
+	// content-length WAJIB ditulis eksplisit.
+	//
+	// Tanpa ini Next.js mengirim dengan Transfer-Encoding: chunked dan TANPA
+	// ukuran total. Pengunduh berkas - termasuk milik Meta - jadi tidak tahu
+	// berapa besar berkasnya, dan terlihat di log nginx: Meta mengunduh berkas
+	// 38 MB tiga kali DARI AWAL lalu menyatakan container gagal sebelum
+	// unduhan terakhir selesai. Kecepatannya sendiri tidak masalah (0,3 detik).
+	return new Response(new Uint8Array(buf), {
+		headers: { ...dasar, "content-length": String(total) },
+	});
 }
