@@ -4,6 +4,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db, klipBatchJobs, klipBatches } from "@/db";
 import { dataRoot } from "@/klip/upload";
+import { pastikanAudioAac } from "@/klip/media-encode";
 
 export const RENDERS_DIR = "renders";
 /** Batas keras sama dengan batas unggah media. */
@@ -64,6 +65,18 @@ export async function POST(
 	const absPath = path.join(dataRoot(), relPath);
 	await mkdir(path.dirname(absPath), { recursive: true });
 	await writeFile(absPath, bytes);
+
+	// Audio diseragamkan ke AAC SEBELUM dicatat.
+	//
+	// Encoder AAC tidak tersedia di Chromium headless milik Playwright,
+	// sehingga render menghasilkan MP4 ber-audio Opus - kombinasi non-standar
+	// yang ditolak Meta ("Instagram gagal memproses video") walau kadang lolos.
+	// Dilakukan di sini supaya SEMUA pembaca berkas ini - tombol unduh maupun
+	// publish ke Instagram - mendapat MP4 yang standar.
+	const normalisasi = await pastikanAudioAac({ absPath });
+	if (normalisasi.diubah || normalisasi.keterangan.startsWith("gagal")) {
+		console.log(`[rendered] audio ${jobId}: ${normalisasi.keterangan}`);
+	}
 
 	await db
 		.update(klipBatchJobs)
