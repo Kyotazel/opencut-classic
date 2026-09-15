@@ -1,12 +1,20 @@
 /**
- * Antrikan SATU video lokal sebagai batch (satu job).
+ * Antrikan video lokal sebagai batch.
  *
  * KENAPA ADA: menguji seluruh alur (render -> publish) lewat UI berarti harus
- * membuat ZIP dulu. Skrip ini membuatkannya, jadi uji satu video cukup satu
- * perintah. Juga berguna untuk pemakaian API-driven.
+ * membuat ZIP dulu. Skrip ini membuatkannya, jadi uji cukup satu perintah.
+ * Juga berguna untuk pemakaian API-driven.
  *
  * PAKAI:
  *   bun run klip:queue <berkas.mp4> --caption "teks" [--template <id>] [--ig <id>]
+ *   bun run klip:queue <berkas.zip>  [--template <id>] [--ig <id>]
+ *
+ * DUA BENTUK INPUT:
+ *   .mp4 -> dibungkus jadi ZIP satu entri bernama "clip_01_<nama>.mp4".
+ *           Awalan clip_NN_ penting: itu yang dipakai memasangkan caption.
+ *   .zip -> DIPAKAI APA ADANYA. ZIP yang sudah berisi captions.json harus
+ *           lewat jalur ini; membungkusnya ulang akan mengurung captions.json
+ *           di dalam byte video dan caption hilang tanpa error.
  *
  * Tanpa --ig, akun tujuan diambil dari setelan default_ig_account_id; kalau
  * setelan itu kosong, video hanya dirender dan publish dilewati.
@@ -28,7 +36,7 @@ async function main(): Promise<void> {
 	const file = process.argv[2];
 	if (!file || file.startsWith("--")) {
 		throw new Error(
-			'pakai: bun run klip:queue <berkas.mp4> --caption "teks" [--template <id>] [--ig <id>]',
+			'pakai: bun run klip:queue <berkas.mp4|berkas.zip> [--caption "teks"] [--template <id>] [--ig <id>]',
 		);
 	}
 	const ownerUserId = resolveDefaultOwnerUserId();
@@ -40,19 +48,62 @@ async function main(): Promise<void> {
 	const templateId = flag({ name: "template" });
 	const igAccountId = flag({ name: "ig" });
 
-	// Namanya disederhanakan: nama asli sering memuat koma dan spasi, dan itu
-	// hanya menambah kerja sanitasi tanpa manfaat.
-	const entryName = "uji-01.mp4";
-	const bytes = await readFile(file);
-	const zipPath = await saveBatchZip({
-		batchId: `uji_${Date.now().toString(36)}`,
-		bytes: await buildZip({ entryName, bytes }),
+	const isZip = path.extname(file).toLowerCase() === ".zip";
+	// ZIP dipakai apa adanya supaya captions.json di dalamnya tetap terbaca.
+	// Kalau dibungkus ulang, captions.json ikut terkubur di dalam byte video.
+	const source = await readFile(file);
+	const batchId = `uji_${Date.now().toString(36)}`;
+	const bytes = isZip ? source : null;
+	let entryName: string;
+	let zipPath: string;
+
+	if (isZip) {
+		zipPath = await saveBatchZip({ batchId, bytes: source });
+		// Daftar entri video dibaca dari ZIP-nya, memakai guard yang sama dengan
+		// endpoint HTTP - jadi zip-slip tetap tertutup di jalur CLI ini juga.
+		const { listZipEntries } = await import("@/klip/batch-store");
+		const entries = await listZipEntries({
+			absPath: path.join(
+				(await import("@/klip/upload")).dataRoot(),
+				zipPath,
+			),
+		});
+		const videos = entries.filter((e) => /\.(mp4|webm|mov)$/i.test(e.name));
+		if (videos.length === 0) {
+			throw new Error(`ZIP tidak berisi video yang dikenali: ${file}`);
+		}
+		// Satu batch bisa berisi banyak video; batchId di atas hanya untuk nama ZIP.
+		const created = await createBatch({
+			input: {
+				zipPath,
+				zipBytes: source.length,
+				entryNames: videos.map((v) => v.name),
+				templateId,
+				caption,
+				igAccountId,
+				source: "api",
+				ownerUserId,
+			},
+		});
+		console.log(`batch ${created.id} dibuat: ${videos.length} job dari ZIP`);
+		for (const v of videos) console.log(`  - ${v.name}`);
+		console.log(`  template : ${created.templateId ?? "(default)"}`);
+		console.log(`  akun IG  : ${created.igAccountId ?? "(default dari setelan)"}`);
+		return;
+	}
+
+	// Jalur .mp4: bungkus jadi ZIP satu entri. Awalan "clip_01_" WAJIB - itu
+	// nomor yang dipakai memasangkan caption dari captions.json.
+	entryName = `clip_01_${path.basename(file).replace(/[^\w.-]+/g, "_")}`;
+	zipPath = await saveBatchZip({
+		batchId,
+		bytes: await buildZip({ entryName, bytes: source }),
 	});
 
 	const created = await createBatch({
 		input: {
 			zipPath,
-			zipBytes: bytes.length,
+			zipBytes: source.length,
 			entryNames: [entryName],
 			templateId,
 			caption,
