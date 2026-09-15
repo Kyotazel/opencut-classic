@@ -6,6 +6,7 @@ import { createBatch, getBatch, listBatchJobs, resolveDefaultOwnerUserId } from 
 import { listBatches, summarizeJobs } from "@/klip/batch-query";
 import { dataRoot, UploadError } from "@/klip/upload";
 import { MAX_CAPTION_LENGTH } from "@/klip/ig-publish";
+import { bacaStatusKuota } from "@/klip/ig-quota-status";
 
 /**
  * POST /api/klip/batches — catat batch, JANGAN kerjakan (Tahap 1).
@@ -89,7 +90,12 @@ export async function GET(request: NextRequest) {
 				jobs,
 			});
 		}
-		return NextResponse.json({ batches: await listBatches({}) });
+		// Status kuota Instagram ikut dikirim supaya halaman bisa memperingatkan
+		// tanpa harus menggali log worker.
+		return NextResponse.json({
+			batches: await listBatches({}),
+			kuotaIg: await bacaStatusKuota(),
+		});
 	} catch (error) {
 		console.error("GET /api/klip/batches failed", error);
 		return NextResponse.json({ error: "Batch list failed" }, { status: 500 });

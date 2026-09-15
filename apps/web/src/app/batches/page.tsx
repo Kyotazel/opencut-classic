@@ -7,6 +7,38 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate } from "@/utils/date";
 
+/** Ambil field error dari respons API tanpa assertion tipe. */
+function pesanErrorDari({ body }: { body: unknown }): string | null {
+	if (!body || typeof body !== "object") return null;
+	const nilai = Object.fromEntries(Object.entries(body))["error"];
+	return typeof nilai === "string" && nilai ? nilai : null;
+}
+
+/**
+ * Keadaan kuota Instagram, ditulis worker saat kena batas laju.
+ *
+ * Ditampilkan supaya "kenapa belum terbit" bisa dijawab dari halaman ini,
+ * tanpa harus menggali log server.
+ */
+type KuotaIg = {
+	pemakaian: number | null;
+	pulihPada: string | null;
+	pesan: string | null;
+};
+
+/** Perkiraan pulih dalam kata-kata; null kalau waktunya sudah lewat. */
+function deskripsiPulih({ kuota }: { kuota: KuotaIg }): string | null {
+	if (!kuota.pulihPada) return null;
+	const pulih = new Date(kuota.pulihPada).getTime();
+	if (!Number.isFinite(pulih)) return null;
+	const sisaMenit = Math.ceil((pulih - Date.now()) / 60_000);
+	if (sisaMenit <= 0) return null;
+	if (sisaMenit < 60) return "sekitar " + sisaMenit + " menit lagi";
+	const jam = Math.floor(sisaMenit / 60);
+	const sisa = sisaMenit % 60;
+	if (sisa === 0) return "sekitar " + jam + " jam lagi";
+	return "sekitar " + jam + " jam " + sisa + " menit lagi";
+}
 type Progress = {
 	queued: number;
 	running: number;
@@ -90,6 +122,7 @@ function isRetryable({ status }: { status: string }): boolean {
 export default function BatchesPage() {
 	const [batches, setBatches] = useState<BatchRow[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [kuotaIg, setKuotaIg] = useState<KuotaIg | null>(null);
 	const [openId, setOpenId] = useState<string | null>(null);
 	const [jobs, setJobs] = useState<JobRow[]>([]);
 	const [jobsLoading, setJobsLoading] = useState(false);
@@ -102,10 +135,12 @@ export default function BatchesPage() {
 			const res = await fetch("/api/klip/batches", { cache: "no-store" });
 			const body = (await res.json()) as {
 				batches?: BatchRow[];
+				kuotaIg?: KuotaIg | null;
 				error?: string;
 			};
 			if (!res.ok) throw new Error(body.error ?? "Gagal memuat batch");
 			setBatches(body.batches ?? []);
+			setKuotaIg(body.kuotaIg ?? null);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : "Gagal memuat batch");
 			setBatches([]);
@@ -136,8 +171,9 @@ export default function BatchesPage() {
 			const res = await fetch(fresh ? `${url}?fresh=1` : url, {
 				method: "POST",
 			});
-			const body = (await res.json()) as { error?: string; retried?: string[] };
-			if (!res.ok) throw new Error(body.error ?? "Gagal menjalankan ulang");
+			const body: unknown = await res.json();
+			if (!res.ok)
+				throw new Error(pesanErrorDari({ body }) ?? "Gagal menjalankan ulang");
 			await load();
 			if (reloadJobs && openId) await toggle({ id: openId });
 		} catch (e) {
@@ -190,6 +226,24 @@ export default function BatchesPage() {
 					</Link>
 				</div>
 			</div>
+
+			{kuotaIg && deskripsiPulih({ kuota: kuotaIg }) && (
+				<Card>
+					<CardContent className="flex flex-col gap-1 p-4 text-sm">
+						<span className="font-medium text-amber-600 dark:text-amber-400">
+							Instagram sedang membatasi panggilan API - publish ditunda
+							{deskripsiPulih({ kuota: kuotaIg })}.
+						</span>
+						<span className="text-muted-foreground text-xs">
+							Meta menghitung kuota panggilan per 24 jam bergulir, sebanding
+							dengan jumlah penayangan akun. Render tetap jalan; hanya
+							penerbitannya yang menunggu.
+							{kuotaIg.pemakaian !== null &&
+								" Pemakaian terakhir: " + kuotaIg.pemakaian + "%."}
+						</span>
+					</CardContent>
+				</Card>
+			)}
 
 			{error && (
 				<Card>

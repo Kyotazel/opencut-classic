@@ -17,6 +17,14 @@ export const SETTING_KEYS = {
 	defaultTemplateId: "default_template_id",
 	defaultIgAccountId: "default_ig_account_id",
 	publishFailureThreshold: "publish_failure_threshold",
+	/**
+	 * Keadaan kuota Instagram, ditulis worker saat kena batas laju.
+	 *
+	 * Ini BUKAN setelan yang diubah manusia melainkan catatan runtime. Disimpan
+	 * di tabel yang sama karena tabel ini sudah menjadi tempat nilai sederhana,
+	 * dan supaya UI bisa menampilkannya tanpa menambah tabel baru.
+	 */
+	igQuotaStatus: "ig_quota_status",
 } as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
@@ -29,6 +37,7 @@ export const SETTING_DEFAULTS: Record<SettingKey, string> = {
 	[SETTING_KEYS.defaultTemplateId]: "",
 	[SETTING_KEYS.defaultIgAccountId]: "",
 	[SETTING_KEYS.publishFailureThreshold]: "2",
+	[SETTING_KEYS.igQuotaStatus]: "",
 };
 
 export const DEFAULT_PUBLISH_FAILURE_THRESHOLD = 2;

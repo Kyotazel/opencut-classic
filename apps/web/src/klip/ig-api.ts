@@ -188,13 +188,26 @@ const UMUR_PEMAKAIAN_MS = 10 * 60_000;
 let pemakaianKuota: { nilai: number; pada: number } | null = null;
 
 /**
- * Buang nilai pemakaian yang tersimpan.
+ * Perkiraan Meta kapan akses pulih, dalam MENIT.
  *
- * Dipakai tes: nilainya hidup di tingkat modul, sehingga tanpa ini hasil satu
- * tes membocor ke tes berikutnya dan assertion-nya jadi menyesatkan.
+ * Diambil dari `estimated_time_to_regain_access` di header
+ * X-Business-Use-Case-Usage. Ini angka resmi dari Meta, jadi jauh lebih baik
+ * daripada menebak "kira-kira sejam cukup" - terutama karena jendela kuota
+ * bergulir 24 jam dan pemulihannya bertahap.
  */
+let estimasiPulihMenit: { nilai: number; pada: number } | null = null;
+
+/** Perkiraan waktu pulih (menit) dari Meta, atau null kalau tidak diketahui/basi. */
+export function estimasiPulihKuotaMenit(): number | null {
+	if (!estimasiPulihMenit) return null;
+	if (Date.now() - estimasiPulihMenit.pada > UMUR_PEMAKAIAN_MS) return null;
+	return estimasiPulihMenit.nilai;
+}
+
+/** Buang seluruh catatan kuota. Dipakai tes dan setelah publish berhasil. */
 export function __lupakanPemakaianKuota(): void {
 	pemakaianKuota = null;
+	estimasiPulihMenit = null;
 }
 
 /** Persentase pemakaian kuota terakhir, atau null kalau tidak diketahui/basi. */
@@ -247,6 +260,15 @@ function catatPemakaian({ res }: { res: Response }): void {
 				tambah(rec["call_count"]);
 				tambah(rec["total_cputime"]);
 				tambah(rec["total_time"]);
+				const pulih = rec["estimated_time_to_regain_access"];
+				if (typeof pulih === "number" && Number.isFinite(pulih)) {
+					// Nilai terbesar dipakai: kalau beberapa business object
+					// melaporkan, yang paling lama yang menentukan.
+					estimasiPulihMenit = {
+						nilai: Math.max(estimasiPulihMenit?.nilai ?? 0, pulih),
+						pada: Date.now(),
+					};
+				}
 			}
 		}
 		if (angka.length > 0) {

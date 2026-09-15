@@ -5,6 +5,11 @@ import { resolveBatchSettings } from "@/klip/settings";
 import { isWithinWindow, minutesUntilWindow } from "@/klip/worker/window";
 import { isRateLimitError } from "@/klip/worker/publish";
 import {
+	estimasiPulihKuotaMenit,
+	pemakaianKuotaTerakhir,
+} from "@/klip/ig-api";
+import { simpanStatusKuota } from "@/klip/ig-quota-status";
+import {
 	claimNextJob,
 	processJob,
 	refreshBatchCounters,
@@ -94,13 +99,36 @@ async function handleFailure({
 	// Jatah percobaan karena itu TIDAK dikurangi - kalau dikurangi, lima kali
 	// kena batas laju menghabiskan job yang sebenarnya tidak bermasalah.
 	const kenaBatasLaju = isRateLimitError({ message });
+	// Jeda memakai perkiraan Meta sendiri kalau tersedia.
+	//
+	// `estimated_time_to_regain_access` (menit) adalah angka resmi dari Meta,
+	// jadi jauh lebih baik daripada menebak satu jam - jendela kuotanya bergulir
+	// 24 jam dan pemulihannya bertahap, sehingga tebakan bisa terlalu cepat
+	// (menabrak lagi) atau terlalu lambat (menunggu sia-sia).
+	const estimasiMenit = estimasiPulihKuotaMenit();
+	const jedaMs =
+		estimasiMenit !== null && estimasiMenit > 0
+			? estimasiMenit * 60_000
+			: RATE_LIMIT_RETRY_DELAY_MS;
 	const retryAt = kenaBatasLaju
-		? new Date(Date.now() + RATE_LIMIT_RETRY_DELAY_MS)
+		? new Date(Date.now() + jedaMs)
 		: nextRetryAt({
 				attempts,
 				maxAttempts: job.maxAttempts,
 				now: new Date(),
 			});
+	if (kenaBatasLaju && retryAt) {
+		// Dicatat supaya UI bisa menampilkan sisa waktu tanpa menggali log.
+		await simpanStatusKuota({
+			status: {
+				pemakaian: pemakaianKuotaTerakhir(),
+				pulihPada: retryAt.toISOString(),
+				pesan: message.slice(0, 300),
+			},
+		}).catch(() => {
+			// Pencatatan status tidak boleh menggagalkan penanganan kegagalan.
+		});
+	}
 	await db
 		.update(klipBatchJobs)
 		.set({
@@ -115,7 +143,7 @@ async function handleFailure({
 		.where(eq(klipBatchJobs.id, job.id));
 	log(
 		kenaBatasLaju
-			? `job ${job.id} kena batas laju Instagram; dicoba lagi dalam 1 jam, jatah percobaan tidak dikurangi`
+			? `job ${job.id} kena batas laju Instagram; dicoba lagi ${Math.round(jedaMs / 60_000)} menit lagi (perkiraan Meta), jatah percobaan tidak dikurangi`
 			: retryAt
 				? `job ${job.id} gagal, dicoba lagi nanti`
 				: `job ${job.id} gagal permanen (${attempts}/${job.maxAttempts})`,

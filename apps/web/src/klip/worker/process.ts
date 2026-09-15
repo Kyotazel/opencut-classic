@@ -10,6 +10,7 @@ import { ChromiumRunner } from "@/klip/worker/chromium";
 import { extractVideosFromZip } from "@/klip/worker/extract";
 import { isRateLimitError, publishRenderedVideo } from "@/klip/worker/publish";
 import { resolveBatchSettings } from "@/klip/settings";
+import { bersihkanStatusKuota } from "@/klip/ig-quota-status";
 
 export const WORKER_ID = `worker-${randomUUID().slice(0, 8)}`;
 
@@ -408,6 +409,9 @@ async function publishStage({
 				updatedAt: new Date(),
 			})
 			.where(eq(klipBatchJobs.id, job.id));
+		// Publish berhasil berarti kuota sudah terpakai dengan benar; catatan
+		// batas laju yang lama tidak relevan lagi dan peringatannya dihapus.
+		await bersihkanStatusKuota().catch(() => {});
 		return {
 			kind: "published",
 			projectId,
