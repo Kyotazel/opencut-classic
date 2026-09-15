@@ -128,6 +128,8 @@ export default function BatchesPage() {
 	const [jobsLoading, setJobsLoading] = useState(false);
 	/** URL yang sedang diproses, supaya tombolnya bisa menampilkan status. */
 	const [retrying, setRetrying] = useState<string | null>(null);
+	/** id batch yang sedang dihapus. */
+	const [deleting, setDeleting] = useState<string | null>(null);
 
 	const load = useCallback(async () => {
 		setError(null);
@@ -180,6 +182,44 @@ export default function BatchesPage() {
 			setError(e instanceof Error ? e.message : "Gagal menjalankan ulang");
 		} finally {
 			setRetrying(null);
+		}
+	};
+
+	/**
+	 * Hapus satu batch beserta berkasnya (ZIP + hasil ekstrak).
+	 *
+	 * Klip yang sudah dirender TIDAK ikut terhapus: kolom klip_projects.batchId
+	 * bukan foreign key, jadi project tetap ada. Yang hilang hanya catatan
+	 * antriannya - dan itu memang tujuannya, karena baris batch adalah catatan
+	 * pekerjaan, bukan pemilik hasil render.
+	 */
+	const hapus = async ({ id }: { id: string }) => {
+		// Klik ganda tidak boleh mengirim dua permintaan.
+		if (deleting) return;
+		const yakin = window.confirm(
+			"Hapus batch ini beserta ZIP dan hasil ekstraknya?\n\n" +
+				"Klip yang sudah dirender dan riwayat publish TIDAK ikut terhapus.",
+		);
+		if (!yakin) return;
+		setDeleting(id);
+		setError(null);
+		try {
+			const res = await fetch(
+				`/api/klip/batches/${encodeURIComponent(id)}`,
+				{ method: "DELETE" },
+			);
+			const body: unknown = await res.json();
+			if (!res.ok) {
+				throw new Error(pesanErrorDari({ body }) ?? "Gagal menghapus batch");
+			}
+			// Kalau batch yang dihapus sedang terbuka, tutup detailnya supaya
+			// daftar job milik batch yang sudah tidak ada tidak tertinggal.
+			if (openId === id) setOpenId(null);
+			await load();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "Gagal menghapus batch");
+		} finally {
+			setDeleting(null);
 		}
 	};
 
@@ -322,6 +362,14 @@ export default function BatchesPage() {
 										onClick={() => void toggle({ id: b.id })}
 									>
 										{openId === b.id ? "Tutup" : "Lihat job"}
+									</Button>
+									<Button
+										variant="outline"
+										size="sm"
+										disabled={deleting !== null}
+										onClick={() => void hapus({ id: b.id })}
+									>
+										{deleting === b.id ? "Menghapus..." : "Hapus"}
 									</Button>
 								</span>
 							</div>
