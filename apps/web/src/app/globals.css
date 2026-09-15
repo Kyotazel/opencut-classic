@@ -1,4 +1,15 @@
-@import "tailwindcss";
+/*
+ * Tailwind v4 auto-detect does NOT respect .gitignore, so it was scanning
+ * .klip-data/ (1.3GB of MP4s and JPEGs) as candidate sources. Raw video bytes
+ * were parsed as class names, which produced garbage utilities (.opacity-401)
+ * and invalid UTF-8 bytes; the generated CSS then failed to parse with
+ * "Unexpected token Ident" and every page returned 500.
+ *
+ * source(none) disables auto-detection and the explicit @source below scans
+ * only real source files. Do not remove.
+ */
+@import "tailwindcss" source(none);
+@source "../";
 
 /* Custom variant for dark mode */
 @custom-variant dark (&:where(.dark, .dark *));
