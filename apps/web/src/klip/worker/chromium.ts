@@ -29,6 +29,8 @@ export type BatchJobResult =
 			 * dengan penutupan halaman - lihat catatan di batch-job/page.tsx.
 			 */
 			stack?: string | null;
+			/** Tahap terakhir sebelum gagal, mis. "render 97%" atau "mengunggah hasil". */
+			lastStep?: string | null;
 	  };
 
 export type RenderProjectInput = {
@@ -231,14 +233,24 @@ export class ChromiumRunner {
 				undefined,
 				{ timeout: timeoutMs },
 			);
+			// Beri jeda singkat sebelum halaman ditutup: console.error dari dalam
+			// renderer-manager ("Export failed:") dikirim lewat CDP secara
+			// asinkron, dan menutup halaman terlalu cepat membuat event itu tidak
+			// pernah sampai ke log worker.
+			await page.waitForTimeout(500);
 			const result = (await page.evaluate(
 				() => window.__BATCH_JOB_RESULT__,
 			)) as BatchJobResult | undefined;
 			if (!result) throw new Error("halaman tidak melaporkan hasil");
 			if (!result.ok) {
-				// Stack disertakan supaya tersimpan di klip_batch_jobs.error dan
-				// bisa dibaca dari UI, bukan cuma dari log yang bergulir.
-				throw new Error(result.stack ? `${result.error}\n${result.stack}` : result.error);
+				// Tahap dan stack disertakan supaya tersimpan di
+				// klip_batch_jobs.error dan bisa dibaca dari UI, bukan cuma dari
+				// log yang bergulir. Tahapnya menjawab "gagal di mana"; stacknya
+				// menjawab "kenapa".
+				const bagian = [result.error];
+				if (result.lastStep) bagian.push(`[tahap terakhir: ${result.lastStep}]`);
+				if (result.stack) bagian.push(`--- penyebab asli ---\n${result.stack}`);
+				throw new Error(bagian.join("\n"));
 			}
 			return result.projectId;
 		} finally {

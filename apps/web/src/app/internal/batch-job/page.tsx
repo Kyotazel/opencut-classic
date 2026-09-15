@@ -37,6 +37,15 @@ type State =
 export default function BatchJobPage() {
 	const [state, setState] = useState<State>({ kind: "working", step: "mulai" });
 	const started = useRef(false);
+	/**
+	 * Tahap terakhir yang sedang dikerjakan.
+	 *
+	 * Dipakai sebagai REF, bukan state React, karena kegagalan dilaporkan dari
+	 * dalam closure yang dibuat sekali - membaca state di sana akan selalu
+	 * memberi nilai awal. Nilai ini yang menjawab pertanyaan "gagal di tahap
+	 * mana": render berapa persen, atau sudah masuk unggahan.
+	 */
+	const lastStep = useRef("mulai");
 
 	useEffect(() => {
 		if (started.current) return;
@@ -69,8 +78,19 @@ export default function BatchJobPage() {
 		}) => {
 			const message = error instanceof Error ? error.message : fallback;
 			const stack = error instanceof Error ? (error.stack ?? null) : null;
-			window.__BATCH_JOB_RESULT__ = { ok: false, error: message, stack };
+			window.__BATCH_JOB_RESULT__ = {
+				ok: false,
+				error: message,
+				stack,
+				lastStep: lastStep.current,
+			};
 			setState({ kind: "error", message });
+		};
+
+		/** Setiap tahap dicatat ke ref sekaligus ditampilkan ke UI. */
+		const step = (next: State) => {
+			if (next.kind === "working") lastStep.current = next.step;
+			setState(next);
 		};
 
 		if (!ref || !video) {
@@ -83,7 +103,7 @@ export default function BatchJobPage() {
 
 		void (async () => {
 			try {
-				setState({ kind: "working", step: "mengambil video" });
+				step({ kind: "working", step: "mengambil video" });
 				const projectId = await createProjectFromServerVideo({
 					projectId: ref,
 					item: { name, url: video, width: null, height: null, duration: null },
@@ -99,21 +119,21 @@ export default function BatchJobPage() {
 					},
 				});
 
-				setState({ kind: "working", step: "menyimpan ke server" });
+				step({ kind: "working", step: "menyimpan ke server" });
 				await pushProject({ id: projectId });
 
 				if (templateId) {
-					await applyTemplateToProject({ ref, projectId, name, templateId, setStep: setState });
+					await applyTemplateToProject({ ref, projectId, name, templateId, setStep: step });
 				}
 
 				// RENDER: hanya kalau worker meminta (batch + job diketahui).
 				// Tanpa keduanya halaman ini tetap berguna untuk membuat project saja.
 				if (batchId && jobId) {
-					await renderAndUpload({ projectId, batchId, jobId, setStep: setState });
+					await renderAndUpload({ projectId, batchId, jobId, setStep: step });
 				}
 
 				window.__BATCH_JOB_RESULT__ = { ok: true, projectId };
-				setState({ kind: "done", projectId });
+				step({ kind: "done", projectId });
 			} catch (error) {
 				fail({ error, fallback: "kegagalan tidak diketahui" });
 			}
@@ -200,7 +220,13 @@ async function renderAndUpload({
 	});
 
 	if (!result.success) {
-		throw new Error(result.error ?? "render gagal");
+		const gagal = new Error(result.error ?? "render gagal");
+		// Stack dari dalam pipeline render dilampirkan. Tanpa ini, stack yang
+		// tertangkap hanya menunjuk ke baris ini - bukan penyebab sebenarnya.
+		if (result.stack) {
+			gagal.stack = `${gagal.stack ?? ""}\n--- penyebab asli ---\n${result.stack}`;
+		}
+		throw gagal;
 	}
 	if (!result.buffer) {
 		throw new Error("render tidak menghasilkan berkas");

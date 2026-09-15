@@ -235,6 +235,9 @@ export class RendererManager {
 			return {
 				success: false,
 				error: error instanceof Error ? error.message : "Unknown export error",
+				// Stack asli ikut disimpan; tanpa ini penyebabnya hilang dan yang
+				// tersisa hanya pesan generik.
+				stack: error instanceof Error ? (error.stack ?? null) : null,
 			};
 		}
 	}

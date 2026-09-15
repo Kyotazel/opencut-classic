@@ -24,6 +24,15 @@ export interface ExportResult {
 	success: boolean;
 	buffer?: ArrayBuffer;
 	error?: string;
+	/**
+	 * Stack trace ASLI dari dalam pipeline render.
+	 *
+	 * KENAPA ADA: catch di renderer-manager hanya menyimpan `error.message`,
+	 * sehingga penyebab sebenarnya hilang dan yang tersisa cuma pesan generik
+	 * seperti "network error" - tanpa petunjuk asalnya dari mana. Stack ini
+	 * diteruskan sampai ke klip_batch_jobs.error supaya kegagalan bisa dilacak.
+	 */
+	stack?: string | null;
 	cancelled?: boolean;
 }
 
