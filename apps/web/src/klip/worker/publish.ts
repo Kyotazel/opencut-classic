@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { db, klipIgAccounts, klipIgPublishItems, klipIgPublishes } from "@/db";
 import { processItems } from "@/klip/ig-publish";
+import { BATAS_PEMAKAIAN_KRITIS, pemakaianKuotaTerakhir } from "@/klip/ig-api";
 
 export type PublishOutcome =
 	| { kind: "published"; permalink: string | null }
@@ -30,6 +31,22 @@ export async function publishRenderedVideo({
 	caption: string | null;
 	igAccountId: string;
 }): Promise<PublishOutcome> {
+	// Mundur SEBELUM menabrak.
+	//
+	// Meta mengirim persentase pemakaian kuota di header setiap respons, dan
+	// angka itu disimpan ig-api. Menerbitkan saat kuota hampir habis hanya
+	// menghasilkan kegagalan yang justru menghabiskan sisa kuota - dan tiap
+	// percobaan membuat container baru. Pesannya sengaja memuat "rate limit"
+	// supaya dikenali isRateLimitError, sehingga worker menjadwalkan ulang
+	// dalam 1 jam dan TIDAK mengurangi jatah percobaan.
+	const pemakaian = pemakaianKuotaTerakhir();
+	if (pemakaian !== null && pemakaian >= BATAS_PEMAKAIAN_KRITIS) {
+		return {
+			kind: "failed",
+			error: `Instagram API rate limit hampir habis (pemakaian kuota ${pemakaian}%); menunggu kuota pulih`,
+		};
+	}
+
 	const accounts = await db
 		.select()
 		.from(klipIgAccounts)

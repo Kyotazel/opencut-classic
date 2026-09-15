@@ -149,7 +149,113 @@ export interface PublishReelOpts {
 	onStage?: (stage: ReelStage) => void;
 }
 
-const POLL_MAX_TRIES = 60;
+/**
+ * Batas jumlah pemeriksaan status container.
+ *
+ * Dengan jeda 60 detik, 30 percobaan berarti 30 menit - jauh lebih dari cukup:
+ * Meta memproses container Reels dalam puluhan detik, dan container yang belum
+ * siap setelah 30 menit berarti ada yang salah.
+ */
+const POLL_MAX_TRIES = 30;
+
+/**
+ * Jeda antar pemeriksaan status container.
+ *
+ * KENAPA 60 DETIK, BUKAN 5: setiap pemeriksaan adalah satu panggilan API, dan
+ * kuota panggilan Instagram dihitung per 24 jam sebagai
+ * `4800 * jumlah penayangan` - akun testing yang sedikit dilihat berarti kuota
+ * kecil. Dengan jeda 5 detik, satu video bisa memakan sampai 60 panggilan
+ * hanya untuk polling, dan kuota habis karena kita sendiri yang menggedor.
+ * Jeda 60 detik memotong biaya itu sekitar 12x.
+ */
+const POLL_INTERVAL_MS = 60_000;
+
+/** Pemakaian kuota yang dianggap kritis; di atas ini kita mundur dulu. */
+export const BATAS_PEMAKAIAN_KRITIS = 90;
+/** Umur maksimum nilai pemakaian yang masih dipercaya. */
+const UMUR_PEMAKAIAN_MS = 10 * 60_000;
+
+/**
+ * Pemakaian kuota terakhir yang dilaporkan Meta, dari header respons.
+ *
+ * Meta mengirim X-Business-Use-Case-Usage dan X-App-Usage berisi persentase
+ * pemakaian. Nilainya dipakai untuk MUNDUR SEBELUM menabrak: menerbitkan saat
+ * kuota hampir habis hanya menghasilkan kegagalan yang menghabiskan sisa kuota.
+ *
+ * Nilai basi sengaja tidak dipercaya - kalau tidak, setelah mundur kita akan
+ * membaca angka lama yang masih tinggi dan mundur lagi tanpa henti.
+ */
+let pemakaianKuota: { nilai: number; pada: number } | null = null;
+
+/**
+ * Buang nilai pemakaian yang tersimpan.
+ *
+ * Dipakai tes: nilainya hidup di tingkat modul, sehingga tanpa ini hasil satu
+ * tes membocor ke tes berikutnya dan assertion-nya jadi menyesatkan.
+ */
+export function __lupakanPemakaianKuota(): void {
+	pemakaianKuota = null;
+}
+
+/** Persentase pemakaian kuota terakhir, atau null kalau tidak diketahui/basi. */
+export function pemakaianKuotaTerakhir(): number | null {
+	if (!pemakaianKuota) return null;
+	if (Date.now() - pemakaianKuota.pada > UMUR_PEMAKAIAN_MS) return null;
+	return pemakaianKuota.nilai;
+}
+
+/** Catat pemakaian kuota dari header respons. Tidak pernah melempar. */
+function catatPemakaian({ res }: { res: Response }): void {
+	try {
+		const angka: number[] = [];
+		const tambah = (v: unknown) => {
+			if (typeof v === "number" && Number.isFinite(v)) angka.push(v);
+		};
+		for (const nama of ["x-business-use-case-usage", "x-app-usage"]) {
+			const raw = res.headers.get(nama);
+			if (!raw) continue;
+			const parsed: unknown = JSON.parse(raw);
+			// Dua bentuk berbeda:
+			//   X-App-Usage               : { call_count, total_cputime, total_time }
+			//   X-Business-Use-Case-Usage : { "<id>": [ { call_count, ... } ] }
+			//
+			// Bentuk datar sempat TIDAK terbaca: nilainya berupa angka, sedangkan
+			// pengumpulnya hanya menerima objek - sehingga header yang paling
+			// umum justru diabaikan tanpa error.
+			const rekaman: Record<string, unknown>[] = [];
+			const kumpulkan = (v: unknown): void => {
+				if (Array.isArray(v)) {
+					for (const isi of v) kumpulkan(isi);
+					return;
+				}
+				// Object.fromEntries dipakai alih-alih assertion tipe: repo ini
+				// melarang assertion yang mempersempit tipe.
+				if (v !== null && typeof v === "object") {
+					rekaman.push(Object.fromEntries(Object.entries(v)));
+				}
+			};
+			if (Array.isArray(parsed)) {
+				kumpulkan(parsed);
+			} else if (parsed !== null && typeof parsed === "object") {
+				const rec = Object.fromEntries(Object.entries(parsed));
+				const datar =
+					"call_count" in rec || "total_cputime" in rec || "total_time" in rec;
+				if (datar) rekaman.push(rec);
+				else for (const v of Object.values(rec)) kumpulkan(v);
+			}
+			for (const rec of rekaman) {
+				tambah(rec["call_count"]);
+				tambah(rec["total_cputime"]);
+				tambah(rec["total_time"]);
+			}
+		}
+		if (angka.length > 0) {
+			pemakaianKuota = { nilai: Math.max(...angka), pada: Date.now() };
+		}
+	} catch {
+		// Header bukan JSON yang dikenal; abaikan.
+	}
+}
 
 function childRecord({
 	rec,
@@ -230,10 +336,14 @@ async function igRequest({
 		const message = error instanceof Error ? error.message : "jaringan gagal";
 		throw new Error(`Instagram API gagal [${where}]: jaringan/server tak terjangkau (${message})`);
 	}
+	catatPemakaian({ res });
 	const text = await res.text().catch(() => "");
 	const rec = parseJsonObject({ text });
 	if (!res.ok || !rec) {
-		console.error(`[ig-api] ${where} -> HTTP ${res.status}${snippet({ text })}`);
+		console.error(
+			`[ig-api] ${where} -> HTTP ${res.status}${snippet({ text })}` +
+				(pemakaianKuota ? ` | pemakaian kuota: ${pemakaianKuota.nilai}%` : ""),
+		);
 	}
 	if (!rec) {
 		throw new Error(
@@ -396,7 +506,7 @@ export async function publishReel(opts: PublishReelOpts): Promise<{
 	containerId: string;
 	permalink: string;
 }> {
-	const pollIntervalMs = opts.pollIntervalMs ?? 5000;
+	const pollIntervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS;
 	opts.onStage?.("upload");
 	let containerId: string;
 	// Diisi kalau jalur video_url yang dipakai, supaya pesan kesalahan nanti
