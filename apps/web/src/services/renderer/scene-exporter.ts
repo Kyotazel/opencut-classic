@@ -162,6 +162,28 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 
 		await output.start();
 
+		// PANASKAN DECODER SEBELUM LOOP DIMULAI.
+		//
+		// KENAPA: decoder video dibuat malas - hanya saat frame pertamanya
+		// dibutuhkan. Untuk layer ekor template, itu terjadi di TENGAH render.
+		// Di server tanpa GPU, pembuatan decoder baru pada saat itu gagal dan
+		// membatalkan render yang sudah berjalan 11 menit; gejalanya muncul
+		// sebagai "network error" di frame pertama layer ekor.
+		//
+		// Menggambar satu frame di ujung timeline lebih dulu membuat SEMUA
+		// decoder - termasuk video ekor - sudah siap sebelum pekerjaan berat
+		// dimulai, sehingga tidak ada alokasi mendadak di tengah jalan.
+		try {
+			await this.renderer.render({
+				node: rootNode,
+				time: Math.max(0, frameCount - 1) * ticksPerFrame,
+			});
+		} catch (error) {
+			// Pemanasan yang gagal tidak boleh membatalkan render; loop utama
+			// akan mencoba lagi dan pesannya akan lebih jelas di sana.
+			console.warn("Pemanasan decoder gagal, render tetap dilanjutkan:", error);
+		}
+
 		if (audioSource && this.audioBuffer) {
 			try {
 				await audioSource.add(this.audioBuffer);

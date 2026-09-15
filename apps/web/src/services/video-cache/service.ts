@@ -246,7 +246,7 @@ export class VideoCache {
 			return;
 		}
 
-		const initPromise = this.initializeSink({ mediaId, file });
+		const initPromise = this.initializeSinkDenganPercobaanUlang({ mediaId, file });
 		this.initPromises.set(mediaId, initPromise);
 
 		try {
@@ -255,6 +255,33 @@ export class VideoCache {
 			this.initPromises.delete(mediaId);
 		}
 	}
+	/**
+	 * Buat decoder, dengan SATU percobaan ulang.
+	 *
+	 * KENAPA: pembuatan decoder di tengah render pernah gagal dengan pesan
+	 * "network error" padahal tidak ada permintaan jaringan yang gagal. Saat
+	 * itu render sudah berjalan 11 menit dan kegagalannya membatalkan semuanya.
+	 * Kegagalan seperti itu sering sementara - sumber daya yang menahan sudah
+	 * dilepas setelah percobaan pertama gagal - sehingga satu percobaan ulang
+	 * jauh lebih murah daripada mengulang seluruh render.
+	 */
+	private async initializeSinkDenganPercobaanUlang({
+		mediaId,
+		file,
+	}: {
+		mediaId: string;
+		file: File;
+	}): Promise<void> {
+		try {
+			await this.initializeSink({ mediaId, file });
+		} catch (error) {
+			const pesan = error instanceof Error ? error.message : String(error);
+			console.warn(`Decoder ${mediaId} gagal dibuat (${pesan}), mencoba sekali lagi`);
+			await new Promise((r) => setTimeout(r, 500));
+			await this.initializeSink({ mediaId, file });
+		}
+	}
+
 	private async initializeSink({
 		mediaId,
 		file,
@@ -295,8 +322,13 @@ export class VideoCache {
 			});
 		} catch (error) {
 			input.dispose();
+			const pesan = error instanceof Error ? error.message : String(error);
 			console.error(`Failed to initialize video sink for ${mediaId}:`, error);
-			throw error;
+			// Pesannya diberi konteks: tanpa ini yang sampai ke worker cuma
+			// "network error" tanpa menyebut video mana yang gagal.
+			throw new Error(`decoder video ${mediaId} gagal dibuat: ${pesan}`, {
+				cause: error,
+			});
 		}
 	}
 

@@ -31,7 +31,39 @@ export type BatchJobResult =
 			stack?: string | null;
 			/** Tahap terakhir sebelum gagal, mis. "render 97%" atau "mengunggah hasil". */
 			lastStep?: string | null;
+			/** Memori renderer saat gagal; diisi worker, bukan halaman. */
+			memori?: string | null;
 	  };
+
+/**
+ * Memori renderer saat ini, dibaca lewat CDP.
+ *
+ * Sengaja tidak pernah melempar: diagnostik tidak boleh menggagalkan job.
+ */
+async function bacaMemori({
+	context,
+	page,
+}: {
+	context: BrowserContext;
+	page: Page;
+}): Promise<string | null> {
+	try {
+		const cdp = await context.newCDPSession(page);
+		const { metrics } = (await cdp.send("Performance.getMetrics")) as {
+			metrics: { name: string; value: number }[];
+		};
+		await cdp.detach().catch(() => {});
+		const ambil = (nama: string) =>
+			metrics.find((m) => m.name === nama)?.value ?? null;
+		const heap = ambil("JSHeapUsedSize");
+		const total = ambil("JSHeapTotalSize");
+		const node = ambil("Nodes");
+		const mb = (v: number | null) => (v === null ? "?" : (v / 1024 / 1024).toFixed(0));
+		return `heap=${mb(heap)}MB total=${mb(total)}MB node=${node ?? "?"}`;
+	} catch {
+		return null;
+	}
+}
 
 export type RenderProjectInput = {
 	opencutRef: string;
@@ -47,12 +79,15 @@ export type RenderProjectInput = {
 /**
  * Batas tunggu satu job, termasuk render.
  *
- * Render memakan sekitar 3,3x durasi video (diukur: 24,9 dtk -> 81 dtk). Video
- * 60 detik berarti ~200 detik render, ditambah ekstraksi video dan pembuatan
- * project. 30 menit memberi ruang cukup untuk video panjang tanpa membuat
- * worker menggantung selamanya kalau halaman benar-benar macet.
+ * DIUKUR DI SERVER: render memakan sekitar 17x durasi video, karena server
+ * tidak punya GPU sehingga semuanya dikerjakan SwiftShader di CPU. Video 2
+ * menit berarti ~34 menit - sudah MELEWATI batas 30 menit yang dipakai
+ * sebelumnya, dan timeout berarti render diulang dari nol sampai 5 kali.
+ *
+ * 60 menit memberi ruang untuk video 2 menit beserta percobaan ulang publish,
+ * tanpa membuat worker menggantung selamanya kalau halaman benar-benar macet.
  */
-export const DEFAULT_JOB_TIMEOUT_MS = 30 * 60_000;
+export const DEFAULT_JOB_TIMEOUT_MS = 60 * 60_000;
 
 /**
  * Teruskan console, error halaman, dan permintaan yang gagal ke log worker.
@@ -241,6 +276,16 @@ export class ChromiumRunner {
 			const result = (await page.evaluate(
 				() => window.__BATCH_JOB_RESULT__,
 			)) as BatchJobResult | undefined;
+			// Saat gagal, memori renderer ikut dicatat.
+			//
+			// KENAPA: kegagalan di tengah render dilaporkan browser dengan pesan
+			// yang tidak berhubungan ("network error") dan tanpa stack. Dugaan
+			// utamanya tekanan memori saat decoder baru dibuat di tengah render,
+			// dan tanpa angka ini dugaan itu tidak bisa dibuktikan atau
+			// dibantah.
+			if (result && !result.ok) {
+				result.memori = await bacaMemori({ context, page });
+			}
 			if (!result) throw new Error("halaman tidak melaporkan hasil");
 			if (!result.ok) {
 				// Tahap dan stack disertakan supaya tersimpan di
@@ -249,6 +294,7 @@ export class ChromiumRunner {
 				// menjawab "kenapa".
 				const bagian = [result.error];
 				if (result.lastStep) bagian.push(`[tahap terakhir: ${result.lastStep}]`);
+				if (result.memori) bagian.push(`[memori renderer: ${result.memori}]`);
 				if (result.stack) bagian.push(`--- penyebab asli ---\n${result.stack}`);
 				throw new Error(bagian.join("\n"));
 			}
