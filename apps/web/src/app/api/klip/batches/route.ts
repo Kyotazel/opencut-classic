@@ -4,7 +4,7 @@ import { MAX_ZIP_BYTES } from "@/klip/batch-upload";
 import { listZipEntries, saveBatchZip } from "@/klip/batch-store";
 import { createBatch, getBatch, listBatchJobs, resolveDefaultOwnerUserId } from "@/klip/batch-service";
 import { listBatches, summarizeJobs } from "@/klip/batch-query";
-import { dataRoot, UploadError } from "@/klip/upload";
+import { ACCEPTED_VIDEO_EXTS, dataRoot, UploadError } from "@/klip/upload";
 import { MAX_CAPTION_LENGTH } from "@/klip/ig-publish";
 import { bacaStatusKuota } from "@/klip/ig-quota-status";
 import { sendTelegram } from "@/klip/alerts";
@@ -25,9 +25,28 @@ import {
  * Balasan 202 + batch_id; worker (Tahap 2) yang mengeksekusi.
  */
 
+/**
+ * Nama entri yang layak jadi JOB, yaitu videonya saja.
+ *
+ * KENAPA DIFILTER: ZIP dari OpenShorts juga membawa captions.json dan
+ * metadata.json. Tanpa filter ini keduanya ikut jadi job, dan worker akan
+ * memprosesnya sebagai video - berakhir di "not a video" yang mengotori
+ * hitungan batch (4 job padahal videonya cuma 2) dan membuat laporan
+ * seolah ada yang gagal.
+ *
+ * Filter di SINI, bukan di worker: jumlah job ditentukan saat intake, dan
+ * memperbaikinya setelahnya berarti batch sudah terlanjur salah hitung.
+ * Ekstensi mengikuti ACCEPTED_VIDEO_EXTS supaya tidak ada dua daftar yang
+ * bisa saling menyimpang.
+ */
+function isVideoEntry(name: string): boolean {
+	const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
+	return ACCEPTED_VIDEO_EXTS.has(ext);
+}
+
 async function jobCountFor({ absPath }: { absPath: string }): Promise<string[]> {
 	const entries = await listZipEntries({ absPath });
-	return entries.map((e) => e.name);
+	return entries.map((e) => e.name).filter(isVideoEntry);
 }
 
 /**

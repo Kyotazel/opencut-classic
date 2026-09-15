@@ -183,7 +183,12 @@ describe("owner resolution dari env", () => {
 });
 
 describe("POST /api/klip/batches (multipart)", () => {
-	test("records a queued batch with one job per usable entry", async () => {
+	test("records a queued batch with one job per VIDEO entry", async () => {
+		// Fixture berisi: clip-a.mp4, clip-b.mp4, nested/clip-c.mov, notes.txt.
+		// Hanya yang berekstensi video yang jadi job. notes.txt DULU ikut
+		// terhitung (jobCount 4) - itu bug: ZIP dari OpenShorts membawa
+		// captions.json dan metadata.json, dan keduanya sempat jadi job
+		// sehingga batch berisi 4 job padahal videonya cuma 2.
 		const buf = await Bun.file(zipPath).arrayBuffer();
 		const res = await createBatchRoute(
 			multipartReq({ file: new File([buf], "batch.zip", { type: "application/zip" }) }),
@@ -198,7 +203,8 @@ describe("POST /api/klip/batches (multipart)", () => {
 		createdBatchIds.push(body.batchId);
 		expect(body.batchId.startsWith("b_")).toBe(true);
 		expect(body.status).toBe("queued");
-		expect(body.jobCount).toBe(4);
+		// 3 video; notes.txt tidak dihitung (lihat catatan di nama tes).
+		expect(body.jobCount).toBe(3);
 		expect(body.templateId).toBeNull();
 
 		const rows = await db.select().from(klipBatches).where(eq(klipBatches.id, body.batchId));
@@ -323,7 +329,8 @@ describe("POST /api/klip/batches (zip_url)", () => {
 		expect(res.status).toBe(202);
 		const body = (await res.json()) as { batchId: string; jobCount: number; status: string };
 		createdBatchIds.push(body.batchId);
-		expect(body.jobCount).toBe(4);
+		// 3 video; notes.txt tidak dihitung (lihat catatan di tes multipart).
+		expect(body.jobCount).toBe(3);
 		expect(body.status).toBe("queued");
 		const rows = await db.select().from(klipBatches).where(eq(klipBatches.id, body.batchId));
 		expect(rows[0]!.source).toBe("api");
