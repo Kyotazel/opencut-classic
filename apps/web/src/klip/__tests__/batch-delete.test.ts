@@ -20,7 +20,13 @@ describe("DELETE /api/klip/batches/[id]", () => {
 	});
 
 	test("tidak mengekspor handler lain yang tidak diinginkan", async () => {
-		const mod = await import("@/app/api/klip/batches/[id]/route");
+		// Di-cast ke Record supaya bisa MEMERIKSA KETIADAAN: TypeScript menolak
+		// mengakses properti yang memang tidak ada di tipe modulnya, padahal
+		// justru itu yang ingin dibuktikan di sini.
+		const mod = (await import("@/app/api/klip/batches/[id]/route")) as Record<
+			string,
+			unknown
+		>;
 		// POST/PUT di sini akan mengejutkan: rute ini hanya untuk menghapus.
 		expect(mod.POST).toBeUndefined();
 		expect(mod.PUT).toBeUndefined();

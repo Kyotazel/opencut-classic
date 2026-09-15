@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db, klipBatchJobs } from "@/db";
 import { ChromiumRunner } from "@/klip/worker/chromium";
 import { resolveBatchSettings } from "@/klip/settings";
@@ -178,6 +178,103 @@ async function countScheduledJobs({ batchId }: { batchId?: string }): Promise<nu
 	return rows.length;
 }
 
+/**
+ * Status job yang berarti pekerjaannya BELUM tuntas untuk batch ini.
+ *
+ * "as const" bukan hiasan: kolom status bertipe enum MySQL, dan drizzle
+ * menolak array string biasa karena tidak bisa menjamin isinya status yang sah.
+ */
+const STATUS_BELUM_TUNTAS = [
+	"queued",
+	"extracting",
+	"rendering",
+	"publishing",
+] as const;
+
+/**
+ * Apakah batch ini masih punya pekerjaan tersisa?
+ *
+ * Dipakai untuk memutuskan kapan ringkasan dikirim. Job yang menunggu jadwal
+ * retry berstatus "queued", jadi ia ikut terhitung - dan itu memang benar:
+ * batch yang masih menyisakan retry belum final, dan mengirim "selesai"
+ * sekarang hanya akan disusul "selesai" lagi nanti.
+ */
+export async function batchMasihAdaKerja({
+	batchId,
+}: {
+	batchId: string;
+}): Promise<boolean> {
+	const rows = await db
+		.select({ id: klipBatchJobs.id })
+		.from(klipBatchJobs)
+		.where(
+			and(
+				eq(klipBatchJobs.batchId, batchId),
+				inArray(klipBatchJobs.status, STATUS_BELUM_TUNTAS),
+			),
+		);
+	return rows.length > 0;
+}
+
+/** Jumlah seluruh job di batch ini, untuk pesan "mulai memproses". */
+async function hitungJobBatch({
+	batchId,
+}: {
+	batchId: string;
+}): Promise<number> {
+	const rows = await db
+		.select({ id: klipBatchJobs.id })
+		.from(klipBatchJobs)
+		.where(eq(klipBatchJobs.batchId, batchId));
+	return rows.length;
+}
+
+/**
+ * Hasil seluruh batch, dibaca dari DATABASE - bukan dari catatan di memori.
+ *
+ * KENAPA DARI DB: worker bisa dijalankan berkali-kali untuk batch yang sama
+ * (worker:once dua kali untuk batch berisi dua video). Catatan di memori hanya
+ * memuat job yang diproses di sesi ITU, sehingga ringkasannya akan berbunyi
+ * "1 video" padahal batch-nya berisi dua. Database menyimpan status final
+ * setiap job, jadi ringkasannya utuh tidak peduli berapa kali worker dijalankan.
+ */
+export async function daftarHasilBatch({
+	batchId,
+}: {
+	batchId: string;
+}): Promise<HasilKlip[]> {
+	const rows = await db
+		.select({
+			entryName: klipBatchJobs.entryName,
+			status: klipBatchJobs.status,
+			error: klipBatchJobs.error,
+			permalink: klipBatchJobs.permalink,
+		})
+		.from(klipBatchJobs)
+		.where(eq(klipBatchJobs.batchId, batchId));
+
+	return rows.map((r) => {
+		const nomor = nomorDariEntri(r.entryName) ?? 0;
+		const judul = r.entryName
+			.replace(/^clip_\d+_/i, "")
+			.replace(/\.mp4$/i, "");
+		if (r.status === "published") {
+			return { nomor, judul, status: "published", permalink: r.permalink };
+		}
+		if (r.status === "rendered") {
+			// Ter-render tapi tidak tayang: bukan kegagalan sistem, tapi pembaca
+			// tidak boleh mengira sudah posting.
+			return { nomor, judul, status: "failed", alasan: "tidak diposting" };
+		}
+		return {
+			nomor,
+			judul,
+			status: "failed",
+			alasan: alasanManusiawi(r.error),
+		};
+	});
+}
+
 function sleep({ ms, signal }: { ms: number; signal?: AbortSignal }): Promise<void> {
 	return new Promise((resolve) => {
 		const timer = setTimeout(resolve, ms);
@@ -209,8 +306,11 @@ export async function runWorker({
 }: WorkerOptions): Promise<void> {
 	const say = log ?? ((m: string) => console.log(`[${WORKER_ID}] ${m}`));
 	say("worker mulai");
-	// batchId -> hasil per video, untuk dirangkum jadi satu pesan di akhir.
-	const hasilPerBatch = new Map<string, HasilKlip[]>();
+	// Batch yang sudah dikirimi tiap pesan, supaya tidak dobel. Disimpan per
+	// pemanggilan runWorker; kalau worker dijalankan ulang, DB yang jadi acuan
+	// isi ringkasannya sehingga tetap utuh.
+	const mulaiTerkirim = new Set<string>();
+	const ringkasanTerkirim = new Set<string>();
 	// Satu Chromium dipakai ulang antar job; membuka browser per job boros.
 	const runner = new ChromiumRunner({ baseUrl, username, password });
 	let processed = 0;
@@ -253,7 +353,15 @@ export async function runWorker({
 				await sleep({ ms: IDLE_POLL_MS, signal });
 				continue;
 			}
-			if (!hasilPerBatch.has(job.batchId)) hasilPerBatch.set(job.batchId, []);
+			// "Mulai memproses" dikirim saat job PERTAMA batch ini dikerjakan.
+			// Dulu pesan ini ikut dikirim bersama ringkasan, sehingga "mulai"
+			// muncul SETELAH pekerjaannya selesai - urutan yang membingungkan
+			// dan membuat pesan "mulai" tidak ada gunanya.
+			if (!mulaiTerkirim.has(job.batchId)) {
+				mulaiTerkirim.add(job.batchId);
+				const jumlah = await hitungJobBatch({ batchId: job.batchId });
+				await sendTelegram(pesanMulaiMemproses({ jobCount: jumlah }));
+			}
 			say(`kerjakan ${job.id} (${job.entryName})`);
 			try {
 				const result = await processJob({ job, runner, baseUrl });
@@ -272,34 +380,28 @@ export async function runWorker({
 						log: say,
 					});
 				}
-				// Dikumpulkan di dalam try: "result" hanya hidup di sini.
-				hasilPerBatch.get(job.batchId)?.push(hasilUntuk(job, result));
 			} catch (error) {
 				await handleFailure({ job, error, log: say });
-				// Kegagalan yang DILEMPAR (bukan dikembalikan sebagai result) tetap
-				// harus muncul di ringkasan, kalau tidak batch tampak bersih
-				// padahal ada video yang tidak tayang.
-				hasilPerBatch.get(job.batchId)?.push(
-					hasilUntuk(job, {
-						kind: "failed",
-						error: error instanceof Error ? error.message : String(error),
-					}),
-				);
 			}
 			await refreshBatchCounters({ batchId: job.batchId });
 			processed += 1;
+
+			// Ringkasan dikirim begitu batch ini TUNTAS - bukan saat worker
+			// berhenti. Worker produksi berjalan terus dan tidak pernah berhenti,
+			// jadi ringkasan yang menunggu worker berhenti tidak akan pernah
+			// terkirim sama sekali.
+			await kirimRingkasanJikaTuntas({
+				batchId: job.batchId,
+				ringkasanTerkirim,
+				say,
+			});
+
 			if (once) break;
 			await sleep({ ms: BUSY_POLL_MS, signal });
 		}
 	} finally {
 		await runner.close();
 	}
-	// Ringkasan dikirim SETELAH worker berhenti mengerjakan, dan hanya untuk
-	// batch yang benar-benar menghasilkan sesuatu. Batch yang masih menyisakan
-	// job terjadwal (retry) sengaja TIDAK dirangkum: hasilnya belum final, dan
-	// pesan "selesai" yang menyusul pesan "selesai" hanya membingungkan.
-	await kirimRingkasan({ hasilPerBatch, batchId, say });
-
 	if (drain) {
 		const pending = await countScheduledJobs({ batchId });
 		if (pending > 0) {
@@ -310,55 +412,42 @@ export async function runWorker({
 }
 
 /**
- * Ubah hasil satu job menjadi baris laporan.
+ * Kirim ringkasan batch, tapi hanya kalau batch-nya sudah TUNTAS.
  *
- * Judul memakai nama entri apa adanya kalau tidak ada yang lebih baik: pekerja
- * batch tidak membaca judul YouTube, jadi nama berkas adalah satu-satunya
- * penanda yang pasti ada.
- */
-function hasilUntuk(job: ClaimedJob, result: ProcessResult): HasilKlip {
-	const nomor = nomorDariEntri(job.entryName) ?? 0;
-	const judul = job.entryName.replace(/^clip_\d+_/i, "").replace(/\.mp4$/i, "");
-	if (result.kind === "published") {
-		return { nomor, judul, status: "published", permalink: result.permalink };
-	}
-	if (result.kind === "rendered") {
-		// Ter-render tapi tidak tayang: bukan kegagalan, tapi juga bukan sukses.
-		// Dihitung sebagai gagal supaya pembaca tidak mengira sudah posting.
-		return { nomor, judul, status: "failed", alasan: "tidak diposting" };
-	}
-	if (result.kind === "skipped") {
-		return { nomor, judul, status: "failed", alasan: alasanManusiawi(result.reason) };
-	}
-	return { nomor, judul, status: "failed", alasan: alasanManusiawi(result.error) };
-}
-
-/**
- * Kirim satu ringkasan per batch, plus pesan "mulai" kalau ada yang dikerjakan.
+ * KENAPA DI SINI, BUKAN DI AKHIR runWorker: worker produksi berjalan
+ * terus-menerus dan tidak pernah keluar dari loop-nya, sehingga ringkasan yang
+ * menunggu worker berhenti tidak akan pernah terkirim. Memeriksa tiap job
+ * selesai membuat ketiga mode (once / drain / terus-menerus) berperilaku sama.
+ *
+ * Isinya dibaca dari database, bukan dari catatan sesi ini, supaya batch yang
+ * dikerjakan bertahap (worker:once dua kali untuk dua video) tetap menghasilkan
+ * satu ringkasan berisi DUA video, bukan dua ringkasan berisi satu.
  *
  * Tidak pernah melempar: notifikasi adalah efek samping, bukan hasil pekerjaan.
- * Worker sudah menyelesaikan publish-nya; gagal mengabari tidak boleh
- * membatalkan itu.
  */
-async function kirimRingkasan({
-	hasilPerBatch,
+async function kirimRingkasanJikaTuntas({
 	batchId,
+	ringkasanTerkirim,
 	say,
 }: {
-	hasilPerBatch: Map<string, HasilKlip[]>;
-	batchId?: string;
+	batchId: string;
+	ringkasanTerkirim: Set<string>;
 	say: (m: string) => void;
 }): Promise<void> {
-	for (const [id, hasil] of hasilPerBatch) {
-		if (batchId && id !== batchId) continue;
-		if (hasil.length === 0) continue;
-		try {
-			await sendTelegram(pesanMulaiMemproses({ jobCount: hasil.length }));
-			await sendTelegram(
-				pesanHasilAkhir({ judul: "", hasil, akun: process.env.KLIP_IG_USERNAME }),
-			);
-		} catch (error) {
-			say(`notifikasi batch ${id} gagal: ${error instanceof Error ? error.message : error}`);
-		}
+	if (ringkasanTerkirim.has(batchId)) return;
+	try {
+		if (await batchMasihAdaKerja({ batchId })) return;
+		const hasil = await daftarHasilBatch({ batchId });
+		if (hasil.length === 0) return;
+		// Ditandai SEBELUM kirim: kalau pengiriman gagal, lebih baik ringkasan
+		// hilang daripada terkirim berkali-kali setiap kali loop memeriksa.
+		ringkasanTerkirim.add(batchId);
+		await sendTelegram(
+			pesanHasilAkhir({ judul: "", hasil, akun: process.env.KLIP_IG_USERNAME }),
+		);
+	} catch (error) {
+		say(
+			`ringkasan batch ${batchId} gagal: ${error instanceof Error ? error.message : error}`,
+		);
 	}
 }

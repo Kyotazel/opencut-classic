@@ -20,8 +20,13 @@ describe("/api/klip/settings", () => {
 	});
 
 	test("tidak mengekspor DELETE", async () => {
+		// Cast ke Record supaya bisa memeriksa KETIADAAN properti - TypeScript
+		// menolak mengaksesnya langsung karena memang tidak ada di tipe modul.
+		const mod = (await import("@/app/api/klip/settings/route")) as Record<
+			string,
+			unknown
+		>;
 		// Setelan tidak dihapus, hanya diubah. DELETE di sini akan mengejutkan.
-		const mod = await import("@/app/api/klip/settings/route");
 		expect(mod.DELETE).toBeUndefined();
 	});
 });
