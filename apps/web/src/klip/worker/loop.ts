@@ -3,6 +3,7 @@ import { db, klipBatchJobs } from "@/db";
 import { ChromiumRunner } from "@/klip/worker/chromium";
 import { resolveBatchSettings } from "@/klip/settings";
 import { isWithinWindow, minutesUntilWindow } from "@/klip/worker/window";
+import { isRateLimitError } from "@/klip/worker/publish";
 import {
 	claimNextJob,
 	processJob,
@@ -40,6 +41,14 @@ export function nextRetryAt({
 	if (attempts + 1 >= maxAttempts) return null;
 	return new Date(now.getTime() + RETRY_DELAY_MS);
 }
+
+/**
+ * Jeda setelah kena batas laju Meta.
+ *
+ * Batas laju aplikasi dihitung PER JAM, jadi menjadwalkan ulang dalam hitungan
+ * menit hanya membentur batas yang sama sambil menghabiskan kuota yang tersisa.
+ */
+export const RATE_LIMIT_RETRY_DELAY_MS = 60 * 60_000;
 
 export type WorkerOptions = {
 	signal?: AbortSignal;
@@ -81,16 +90,22 @@ async function handleFailure({
 }): Promise<void> {
 	const message = error instanceof Error ? error.message : String(error);
 	const attempts = job.attempts + 1;
-	const retryAt = nextRetryAt({
-		attempts,
-		maxAttempts: job.maxAttempts,
-		now: new Date(),
-	});
+	// Kena batas laju BUKAN kegagalan job: yang perlu dilakukan hanya menunggu.
+	// Jatah percobaan karena itu TIDAK dikurangi - kalau dikurangi, lima kali
+	// kena batas laju menghabiskan job yang sebenarnya tidak bermasalah.
+	const kenaBatasLaju = isRateLimitError({ message });
+	const retryAt = kenaBatasLaju
+		? new Date(Date.now() + RATE_LIMIT_RETRY_DELAY_MS)
+		: nextRetryAt({
+				attempts,
+				maxAttempts: job.maxAttempts,
+				now: new Date(),
+			});
 	await db
 		.update(klipBatchJobs)
 		.set({
 			status: retryAt ? "queued" : "failed",
-			attempts,
+			attempts: kenaBatasLaju ? job.attempts : attempts,
 			nextAttemptAt: retryAt,
 			error: message,
 			lockedAt: null,
@@ -99,9 +114,11 @@ async function handleFailure({
 		})
 		.where(eq(klipBatchJobs.id, job.id));
 	log(
-		retryAt
-			? `job ${job.id} gagal, dicoba lagi nanti`
-			: `job ${job.id} gagal permanen (${attempts}/${job.maxAttempts})`,
+		kenaBatasLaju
+			? `job ${job.id} kena batas laju Instagram; dicoba lagi dalam 1 jam, jatah percobaan tidak dikurangi`
+			: retryAt
+				? `job ${job.id} gagal, dicoba lagi nanti`
+				: `job ${job.id} gagal permanen (${attempts}/${job.maxAttempts})`,
 		message,
 	);
 }

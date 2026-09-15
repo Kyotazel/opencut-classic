@@ -100,11 +100,21 @@ export async function publishRenderedVideo({
 export function isRateLimitError({ message }: { message: string }): boolean {
 	const m = message.toLowerCase();
 	return (
+		// Meta memakai kalimat yang TIDAK memuat "rate limit" sama sekali.
+		// Sebelum ini "Application request limit reached" tidak dikenali,
+		// sehingga batas laju dihitung sebagai kegagalan konten: circuit breaker
+		// ikut menghitungnya, dan job diulang cepat sehingga kuota makin habis.
+		m.includes("application request limit reached") ||
+		m.includes("request limit reached") ||
 		m.includes("rate limit") ||
 		m.includes("too many") ||
 		m.includes("429") ||
 		m.includes("temporarily blocked") ||
 		m.includes("user cap") ||
-		m.includes("spam")
+		m.includes("api call limit") ||
+		m.includes("spam") ||
+		// Kode kesalahan Meta untuk batas laju: 4 = batas aplikasi,
+		// 17 = batas pengguna, 32 = batas halaman, 613 = batas panggilan API.
+		/"code"\s*:\s*(4|17|32|613)\b/.test(m)
 	);
 }

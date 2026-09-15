@@ -13,7 +13,12 @@ import {
 } from "@/db";
 import { SETTING_KEYS, setSetting } from "@/klip/settings";
 import { isRateLimitError } from "@/klip/worker/publish";
-import { claimNextJob, maybeHaltBatch, processJob, refreshBatchCounters } from "@/klip/worker/process";
+import {
+	claimNextJob,
+	maybeHaltBatch,
+	processJob,
+	refreshBatchCounters,
+} from "@/klip/worker/process";
 import type { ChromiumRunner } from "@/klip/worker/chromium";
 
 /**
@@ -64,7 +69,11 @@ async function makeProject(): Promise<string> {
 	return id;
 }
 
-async function makeAccount({ status }: { status: "active" | "token_expired" }): Promise<string> {
+async function makeAccount({
+	status,
+}: {
+	status: "active" | "token_expired";
+}): Promise<string> {
 	const id = newId({ prefix: "ig" });
 	await db.insert(klipIgAccounts).values({
 		id,
@@ -131,18 +140,28 @@ async function makeJob({
 }
 
 async function readJob({ id }: { id: string }) {
-	const rows = await db.select().from(klipBatchJobs).where(eq(klipBatchJobs.id, id)).limit(1);
+	const rows = await db
+		.select()
+		.from(klipBatchJobs)
+		.where(eq(klipBatchJobs.id, id))
+		.limit(1);
 	return rows[0];
 }
 
 async function readBatch({ id }: { id: string }) {
-	const rows = await db.select().from(klipBatches).where(eq(klipBatches.id, id)).limit(1);
+	const rows = await db
+		.select()
+		.from(klipBatches)
+		.where(eq(klipBatches.id, id))
+		.limit(1);
 	return rows[0];
 }
 
 beforeAll(async () => {
 	process.env.APP_USER = "ordo";
-	process.env.KLIP_DATA_ROOT = await mkdtemp(path.join(tmpdir(), "klip-publish-"));
+	process.env.KLIP_DATA_ROOT = await mkdtemp(
+		path.join(tmpdir(), "klip-publish-"),
+	);
 	dataDir = process.env.KLIP_DATA_ROOT;
 	await mkdir(path.join(dataDir, "renders"), { recursive: true });
 
@@ -157,16 +176,28 @@ beforeAll(async () => {
 
 afterAll(async () => {
 	if (jobIds.length > 0) {
-		await db.delete(klipBatchJobs).where(inArray(klipBatchJobs.id, jobIds)).catch(() => {});
+		await db
+			.delete(klipBatchJobs)
+			.where(inArray(klipBatchJobs.id, jobIds))
+			.catch(() => {});
 	}
 	if (batchIds.length > 0) {
-		await db.delete(klipBatches).where(inArray(klipBatches.id, batchIds)).catch(() => {});
+		await db
+			.delete(klipBatches)
+			.where(inArray(klipBatches.id, batchIds))
+			.catch(() => {});
 	}
 	if (projectIds.length > 0) {
-		await db.delete(klipProjects).where(inArray(klipProjects.id, projectIds)).catch(() => {});
+		await db
+			.delete(klipProjects)
+			.where(inArray(klipProjects.id, projectIds))
+			.catch(() => {});
 	}
 	if (accountIds.length > 0) {
-		await db.delete(klipIgAccounts).where(inArray(klipIgAccounts.id, accountIds)).catch(() => {});
+		await db
+			.delete(klipIgAccounts)
+			.where(inArray(klipIgAccounts.id, accountIds))
+			.catch(() => {});
 	}
 	await setSetting({
 		key: SETTING_KEYS.defaultIgAccountId,
@@ -185,11 +216,23 @@ describe("publish otomatis", () => {
 		const projectId = await makeProject();
 		const rendered = path.join("renders", "sudah-ada.mp4");
 		await writeFile(path.join(dataDir, rendered), Buffer.from("mp4 palsu"));
-		const jobId = await makeJob({ batchId, projectId, renderedPath: rendered, status: "rendered" });
+		const jobId = await makeJob({
+			batchId,
+			projectId,
+			renderedPath: rendered,
+			status: "rendered",
+		});
 
 		const { runner, calls } = explodingRunner();
 		const result = await processJob({
-			job: { id: jobId, batchId, entryName: "clip.mp4", attempts: 0, maxAttempts: 5, projectId },
+			job: {
+				id: jobId,
+				batchId,
+				entryName: "clip.mp4",
+				attempts: 0,
+				maxAttempts: 5,
+				projectId,
+			},
 			runner,
 			baseUrl: "http://127.0.0.1:6050",
 		});
@@ -204,7 +247,10 @@ describe("publish otomatis", () => {
 
 	test("publish gagal: tahap publish_failed, bukan dirender ulang", async () => {
 		const accountId = await makeAccount({ status: "active" });
-		const batchId = await makeBatch({ igAccountId: accountId, caption: "caption uji" });
+		const batchId = await makeBatch({
+			igAccountId: accountId,
+			caption: "caption uji",
+		});
 		const projectId = await makeProject();
 		// Berkas sengaja tidak dibuat: publish gagal di baca berkas, jadi tidak
 		// ada permintaan jaringan sama sekali.
@@ -218,7 +264,14 @@ describe("publish otomatis", () => {
 		const { runner, calls } = explodingRunner();
 		await expect(
 			processJob({
-				job: { id: jobId, batchId, entryName: "clip.mp4", attempts: 0, maxAttempts: 5, projectId },
+				job: {
+					id: jobId,
+					batchId,
+					entryName: "clip.mp4",
+					attempts: 0,
+					maxAttempts: 5,
+					projectId,
+				},
 				runner,
 				baseUrl: "http://127.0.0.1:6050",
 			}),
@@ -245,7 +298,14 @@ describe("publish otomatis", () => {
 			});
 			await expect(
 				processJob({
-					job: { id: jobId, batchId, entryName: "clip.mp4", attempts: 0, maxAttempts: 5, projectId },
+					job: {
+						id: jobId,
+						batchId,
+						entryName: "clip.mp4",
+						attempts: 0,
+						maxAttempts: 5,
+						projectId,
+					},
 					runner,
 					baseUrl: "http://127.0.0.1:6050",
 				}),
@@ -284,12 +344,18 @@ describe("publish otomatis", () => {
 	test("batch yang dihentikan tidak diambil lagi oleh worker", async () => {
 		const batchId = await makeBatch();
 		const jobId = await makeJob({ batchId, status: "queued" });
-		await db.update(klipBatches).set({ status: "halted" }).where(eq(klipBatches.id, batchId));
+		await db
+			.update(klipBatches)
+			.set({ status: "halted" })
+			.where(eq(klipBatches.id, batchId));
 
 		expect(await claimNextJob({ batchId })).toBeNull();
 
 		// Setelah dijalankan ulang manual, job itu boleh dikerjakan lagi.
-		await db.update(klipBatches).set({ status: "running" }).where(eq(klipBatches.id, batchId));
+		await db
+			.update(klipBatches)
+			.set({ status: "running" })
+			.where(eq(klipBatches.id, batchId));
 		const claimed = await claimNextJob({ batchId });
 		expect(claimed?.id).toBe(jobId);
 	});
@@ -315,13 +381,56 @@ describe("publish otomatis", () => {
 describe("pengenalan kegagalan batas laju", () => {
 	test("pesan batas laju dikenali", () => {
 		expect(isRateLimitError({ message: "Rate limit reached" })).toBe(true);
-		expect(isRateLimitError({ message: "HTTP 429 Too Many Requests" })).toBe(true);
-		expect(isRateLimitError({ message: "User is temporarily blocked" })).toBe(true);
+		expect(isRateLimitError({ message: "HTTP 429 Too Many Requests" })).toBe(
+			true,
+		);
+		expect(isRateLimitError({ message: "User is temporarily blocked" })).toBe(
+			true,
+		);
+	});
+
+	test("pesan ASLI Meta dikenali", () => {
+		// Inilah pesan yang benar-benar muncul di produksi dan sebelumnya LOLOS
+		// dari pemeriksaan, sehingga batas laju dihitung sebagai kegagalan konten.
+		expect(
+			isRateLimitError({
+				message:
+					"Instagram API gagal [GET /17905270827559278]: Application request limit reached",
+			}),
+		).toBe(true);
+		expect(
+			isRateLimitError({ message: "Application request limit reached" }),
+		).toBe(true);
+		expect(isRateLimitError({ message: "User request limit reached" })).toBe(
+			true,
+		);
+		// Kode kesalahan Meta untuk batas laju.
+		expect(
+			isRateLimitError({ message: '{"error":{"code":4,"message":"x"}}' }),
+		).toBe(true);
+		expect(
+			isRateLimitError({ message: '{"error":{"code":613,"message":"x"}}' }),
+		).toBe(true);
+		expect(isRateLimitError({ message: "API call limit exceeded" })).toBe(true);
+	});
+
+	test("kode kesalahan lain TIDAK dianggap batas laju", () => {
+		// 100 = parameter tidak valid; muncul saat video_url tidak dikirim.
+		expect(
+			isRateLimitError({ message: '{"error":{"code":100,"message":"x"}}' }),
+		).toBe(false);
+		expect(
+			isRateLimitError({ message: '{"error":{"code":190,"message":"token"}}' }),
+		).toBe(false);
 	});
 
 	test("kegagalan biasa tidak dianggap batas laju", () => {
-		expect(isRateLimitError({ message: "ENOENT: no such file or directory" })).toBe(false);
-		expect(isRateLimitError({ message: "IG_TOKEN_INVALID: token kedaluwarsa" })).toBe(false);
+		expect(
+			isRateLimitError({ message: "ENOENT: no such file or directory" }),
+		).toBe(false);
+		expect(
+			isRateLimitError({ message: "IG_TOKEN_INVALID: token kedaluwarsa" }),
+		).toBe(false);
 		expect(isRateLimitError({ message: "Video terlalu pendek" })).toBe(false);
 	});
 });
