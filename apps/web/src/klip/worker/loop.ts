@@ -36,24 +36,39 @@ export const RETRY_DELAY_MS = 5 * 60_000;
  * hanya pergantian jam, bukan pekerjaan. */
 export const WINDOW_POLL_MS = 60_000;
 
+
 /**
- * Hitung jadwal retry berikutnya.
+ * Rencana setelah satu kegagalan publish.
  *
- * attempts sudah dipakai sampai batas -> job gagal permanen dan TIDAK
- * dijadwalkan lagi. Selain itu dijadwalkan mundur, supaya kegagalan sesaat
- * (file terkunci, disk penuh) tidak menghabiskan kuota retry.
+ * Jatah percobaan SELALU berkurang, termasuk saat kena batas laju. Aturan
+ * lamanya - batas laju tidak menghabiskan jatah - berarti job bisa dicoba
+ * selamanya; pemiliknya memutuskan lebih baik berhenti dan dikabari, lalu
+ * dijalankan ulang manual kalau kuotanya sudah pulih.
+ *
+ * Yang TIDAK disamakan hanya jedanya: batas laju menunggu lebih lama, karena
+ * jendela kuota Meta bergulir per jam.
+ *
+ * Diekspor untuk tes: keputusannya murni, jadi tidak perlu Chromium.
  */
-export function nextRetryAt({
+export function rencanaSetelahGagal({
 	attempts,
 	maxAttempts,
+	kenaBatasLaju,
+	jedaBatasLajuMs,
 	now,
 }: {
 	attempts: number;
 	maxAttempts: number;
+	kenaBatasLaju: boolean;
+	jedaBatasLajuMs: number;
 	now: Date;
-}): Date | null {
-	if (attempts + 1 >= maxAttempts) return null;
-	return new Date(now.getTime() + RETRY_DELAY_MS);
+}): { attempts: number; retryAt: Date | null } {
+	const berikutnya = attempts + 1;
+	if (berikutnya >= maxAttempts) {
+		return { attempts: berikutnya, retryAt: null };
+	}
+	const jeda = kenaBatasLaju ? jedaBatasLajuMs : RETRY_DELAY_MS;
+	return { attempts: berikutnya, retryAt: new Date(now.getTime() + jeda) };
 }
 
 /**
@@ -103,11 +118,14 @@ async function handleFailure({
 	log: (message: string, extra?: unknown) => void;
 }): Promise<void> {
 	const message = error instanceof Error ? error.message : String(error);
-	const attempts = job.attempts + 1;
-	// Kena batas laju BUKAN kegagalan job: yang perlu dilakukan hanya menunggu.
-	// Jatah percobaan karena itu TIDAK dikurangi - kalau dikurangi, lima kali
-	// kena batas laju menghabiskan job yang sebenarnya tidak bermasalah.
 	const kenaBatasLaju = isRateLimitError({ message });
+	// Batas laju TETAP menghabiskan jatah percobaan.
+	//
+	// Dulu tidak: alasannya "batas laju bukan kegagalan job", dan akibatnya job
+	// yang kena batas laju dicoba TERUS MENERUS tanpa batas - berhari-hari
+	// kalau kuota Instagram sedang habis. Pemiliknya memutuskan lebih baik
+	// berhenti, dikabari, lalu dijalankan ulang manual setelah kuotanya pulih.
+	//
 	// Jeda memakai perkiraan Meta sendiri kalau tersedia.
 	//
 	// `estimated_time_to_regain_access` (menit) adalah angka resmi dari Meta,
@@ -119,13 +137,15 @@ async function handleFailure({
 		estimasiMenit !== null && estimasiMenit > 0
 			? estimasiMenit * 60_000
 			: RATE_LIMIT_RETRY_DELAY_MS;
-	const retryAt = kenaBatasLaju
-		? new Date(Date.now() + jedaMs)
-		: nextRetryAt({
-				attempts,
-				maxAttempts: job.maxAttempts,
-				now: new Date(),
-			});
+	const rencana = rencanaSetelahGagal({
+		attempts: job.attempts,
+		maxAttempts: job.maxAttempts,
+		kenaBatasLaju,
+		jedaBatasLajuMs: jedaMs,
+		now: new Date(),
+	});
+	const attempts = rencana.attempts;
+	const retryAt = rencana.retryAt;
 	if (kenaBatasLaju && retryAt) {
 		// Dicatat supaya UI bisa menampilkan sisa waktu tanpa menggali log.
 		await simpanStatusKuota({
@@ -142,7 +162,7 @@ async function handleFailure({
 		.update(klipBatchJobs)
 		.set({
 			status: retryAt ? "queued" : "failed",
-			attempts: kenaBatasLaju ? job.attempts : attempts,
+			attempts, // selalu naik, termasuk saat kena batas laju
 			nextAttemptAt: retryAt,
 			error: message,
 			lockedAt: null,
@@ -152,7 +172,9 @@ async function handleFailure({
 		.where(eq(klipBatchJobs.id, job.id));
 	log(
 		kenaBatasLaju
-			? `job ${job.id} kena batas laju Instagram; dicoba lagi ${Math.round(jedaMs / 60_000)} menit lagi (perkiraan Meta), jatah percobaan tidak dikurangi`
+			? retryAt
+				? `job ${job.id} kena batas laju Instagram; dicoba lagi ${Math.round(jedaMs / 60_000)} menit lagi (${attempts}/${job.maxAttempts})`
+				: `job ${job.id} kena batas laju ${attempts}x dan menyerah; jalankan ulang manual kalau kuota sudah pulih`
 			: retryAt
 				? `job ${job.id} gagal, dicoba lagi nanti`
 				: `job ${job.id} gagal permanen (${attempts}/${job.maxAttempts})`,
