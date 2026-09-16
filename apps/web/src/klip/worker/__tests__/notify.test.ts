@@ -45,8 +45,18 @@ describe("alasanManusiawi", () => {
 
 describe("pesanHasilAkhir", () => {
 	const hasil = [
-		{ nomor: 1, judul: "Kalau Lo Bingung", status: "published" as const },
-		{ nomor: 2, judul: "Tiga Langkah", status: "published" as const },
+		{
+			nomor: 1,
+			judul: "Kalau Lo Bingung",
+			status: "published" as const,
+			permalink: "https://www.instagram.com/reel/AAA111/",
+		},
+		{
+			nomor: 2,
+			judul: "Tiga Langkah",
+			status: "published" as const,
+			permalink: "https://www.instagram.com/reel/BBB222/",
+		},
 		{ nomor: 3, judul: "Jangan Lakukan", status: "failed" as const, alasan: "video terlalu pendek" },
 	];
 
@@ -59,11 +69,24 @@ describe("pesanHasilAkhir", () => {
 		expect(p).toContain("video terlalu pendek");
 	});
 
-	test("satu tautan profil, bukan satu per klip", () => {
+	test("tautan Reel per klip, bukan nama berkas", () => {
+		// Nama berkas tidak bisa diklik dan tidak memberi tahu apa pun setelah
+		// tayang; yang dicari pemiliknya justru "yang mana yang sudah naik".
 		const p = pesanHasilAkhir({ judul: "x", hasil, akun: "@motivasikaya26" });
-		const jumlahTautan = (p.match(/instagram\.com/g) ?? []).length;
-		expect(jumlahTautan).toBe(1);
+		expect(p).toContain("https://www.instagram.com/reel/AAA111/");
+		expect(p).toContain("https://www.instagram.com/reel/BBB222/");
+		expect(p).not.toContain("Kalau Lo Bingung");
 		expect(p).toContain("instagram.com/motivasikaya26");
+	});
+
+	test("klip tayang tanpa permalink tidak mencetak baris kosong", () => {
+		// IG kadang tidak mengembalikan permalink. Lebih baik "tayang" saja
+		// daripada baris yang menggantung tanpa isi.
+		const p = pesanHasilAkhir({
+			judul: "x",
+			hasil: [{ nomor: 1, judul: "a", status: "published" as const }],
+		});
+		expect(p).toContain("\u2713 01 tayang");
 	});
 
 	test("semua gagal -> ditandai GAGAL TOTAL", () => {
@@ -83,7 +106,7 @@ describe("pesanHasilAkhir", () => {
 			{ nomor: 2, judul: "dua", status: "published" as const },
 		];
 		const p = pesanHasilAkhir({ judul: "x", hasil: acak });
-		expect(p.indexOf("dua")).toBeLessThan(p.indexOf("sepuluh"));
+		expect(p.indexOf("\u2713 02")).toBeLessThan(p.indexOf("\u2713 10"));
 	});
 
 	test("12 klip tetap di bawah batas 4096 Telegram", () => {

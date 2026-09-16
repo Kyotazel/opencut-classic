@@ -10,6 +10,10 @@ import { ChromiumRunner } from "@/klip/worker/chromium";
 import { captionFromZip, extractVideosFromZip } from "@/klip/worker/extract";
 import { isRateLimitError, publishRenderedVideo } from "@/klip/worker/publish";
 import { resolveBatchSettings } from "@/klip/settings";
+import {
+	hapusSumberJob,
+	hapusZipBatchJikaTuntas,
+} from "@/klip/worker/source-cleanup";
 import { bersihkanStatusKuota } from "@/klip/ig-quota-status";
 
 export const WORKER_ID = `worker-${randomUUID().slice(0, 8)}`;
@@ -438,6 +442,14 @@ async function publishStage({
 		// Publish berhasil berarti kuota sudah terpakai dengan benar; catatan
 		// batas laju yang lama tidak relevan lagi dan peringatannya dihapus.
 		await bersihkanStatusKuota().catch(() => {});
+		// Berkas MASUKAN dari OpenShorts tidak dibutuhkan lagi: IG sudah punya
+		// salinannya, dan yang disimpan di sini adalah hasil render. Gagal
+		// menghapus tidak boleh menggagalkan publish - berkas yang tertinggal
+		// jauh lebih ringan daripada klip yang tidak tayang.
+		await hapusSumberJob({ batchId: job.batchId, entryName: job.entryName }).catch(
+			() => {},
+		);
+		await hapusZipBatchJikaTuntas({ batchId: job.batchId }).catch(() => {});
 		return {
 			kind: "published",
 			projectId,

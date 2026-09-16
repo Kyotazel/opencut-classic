@@ -113,7 +113,10 @@ export function pesanHasilAkhir({
 	for (const h of urut) {
 		const no = String(h.nomor).padStart(2, "0");
 		if (h.status === "published") {
-			baris.push(`✓ ${no} ${h.judul}`);
+			// Link Reel, bukan nama berkas. Nama berkas tidak bisa diklik dan
+			// tidak memberi tahu apa pun setelah klipnya tayang - yang dicari
+			// pemiliknya justru "yang mana yang sudah naik".
+			baris.push(h.permalink ? `✓ ${no} ${h.permalink}` : `✓ ${no} tayang`);
 		} else {
 			baris.push(`✗ ${no} ${h.judul}${h.alasan ? ` — ${h.alasan}` : ""}`);
 		}
